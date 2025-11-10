@@ -1,0 +1,40 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/sql-query-assistant', '.']
+  
+  # Push the container image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/sql-query-assistant']
+  
+  # Deploy container image to Cloud Run
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+    - 'run'
+    - 'deploy'
+    - 'sql-query-assistant'
+    - '--image'
+    - 'gcr.io/$PROJECT_ID/sql-query-assistant'
+    - '--region'
+    - 'us-central1'
+    - '--platform'
+    - 'managed'
+    - '--allow-unauthenticated'
+    - '--set-env-vars'
+    - 'DB_SERVER=mysql-dhanish2468-a3a0.j.aivencloud.com,DB_PORT=20138,DB_USER=avnadmin,GCP_REGION=us-central1,GEMINI_MODEL=gemini-2.5-flash,MAX_ROWS_RETURN=1000,GEMINI_API_KEY=AIzaSyAb8RN6KvQqZ3KwDNt9bXhg6UE0QiIZM_ax5uRQK_ZIh5nHf6sw,GCP_PROJECT=top-caldron-477810-k3'
+    - '--cpu'
+    - '2'
+    - '--memory'
+    - '2Gi'
+    - '--timeout'
+    - '300'
+    - '--concurrency'
+    - '80'
+
+images:
+  - 'gcr.io/$PROJECT_ID/sql-query-assistant'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 1800s

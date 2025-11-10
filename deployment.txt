@@ -1,0 +1,24 @@
+# 1. Make scripts executable
+chmod +x setup.sh deploy.sh
+sq
+# 2. Run setup
+./setup.sh
+
+# 3. Deploy (it will prompt for database details)
+./deploy.sh
+
+# When prompted, enter:
+# Database Server: 136.113.43.32
+# Database Port: 3306  
+# Database User: root
+# Database Password: Google$2025
+
+gcloud run deploy sql-query-assistant \
+    --source . \
+    --region us-central1 \
+    --platform managed \
+    --allow-unauthenticated \
+    --set-env-vars="DB_SERVER=136.113.43.32,DB_PORT=3306,DB_USER=sql_assistant,DB_PASSWORD=Assistant@123,GCP_REGION=us-central1,GEMINI_MODEL=gemini-2.5-flash,MAX_ROWS_RETURN=1000,GEMINI_API_KEY=AIzaSyC7P-qFcIWRjQADmPV9jPmlQCFyb5I_N8o" \
+    --cpu=1 \
+    --memory=1Gi \
+    --timeout=300
