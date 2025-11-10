@@ -1,5 +1,4 @@
 import pymysql
-import pandas as pd
 from sqlalchemy import create_engine, text, inspect
 from contextlib import contextmanager
 import logging
@@ -28,7 +27,6 @@ class DatabaseConnector:
     
     def _build_mysql_connection_string(self):
         """Build MySQL connection string for Aiven with SSL"""
-        # Use custom config if provided, else use default
         server = self.custom_config.get('server', config.DB_SERVER)
         port = self.custom_config.get('port', config.DB_PORT)
         user = self.custom_config.get('user', config.DB_USER)
@@ -37,7 +35,7 @@ class DatabaseConnector:
         encoded_password = quote_plus(password)
         base_string = f"mysql+pymysql://{user}:{encoded_password}@{server}:{port}"
         
-        # Aiven SSL configuration - updated for proper SSL verification
+        # Aiven SSL configuration
         ssl_params = "ssl_ca=/app/ca.pem&ssl_verify_cert=true"
         
         if self.database:
@@ -58,10 +56,8 @@ class DatabaseConnector:
         if not server or not user or not password:
             raise Exception("SQL Server connection requires server, user, and password")
         
-        # Clean server (remove port if included)
         server_clean = server.split(':')[0]
         
-        # Force use of pymssql explicitly in the connection string
         if database:
             return f"mssql+pymssql://{user}:{password}@{server_clean}:{port}/{database}"
         else:
@@ -74,10 +70,9 @@ class DatabaseConnector:
             logger.info(f"Creating engine for {self.db_type} - Aiven MySQL")
             
             if self.db_type == "mysql":
-                # Aiven requires SSL certificate verification
                 ssl_args = {
                     "ssl": {
-                        "ca": "/app/ca.pem",  # This path is INSIDE the Docker container
+                        "ca": "/app/ca.pem",
                         "check_hostname": True,
                         "verify_mode": True
                     }
@@ -91,8 +86,7 @@ class DatabaseConnector:
                         **ssl_args
                     }
                 )
-            else:  # sqlserver
-                # For SQL Server - explicitly use pymssql
+            else:
                 self.engine = create_engine(
                     connection_string,
                     pool_pre_ping=True,
@@ -130,30 +124,31 @@ class DatabaseConnector:
                 connection.close()
     
     def execute_query(self, query, params=None, return_data=True):
-        """Execute SQL query safely with parameters"""
+        """Execute SQL query safely with parameters - without pandas"""
         try:
             with self.get_connection() as conn:
                 if return_data:
-                    result = pd.read_sql(text(query), conn, params=params)
+                    result = conn.execute(text(query), params or {})
+                    rows = result.fetchall()
                     
-                    # Convert date/datetime objects to strings for JSON serialization
-                    def convert_dates(obj):
-                        if isinstance(obj, (date, datetime)):
-                            return obj.isoformat()
-                        return obj
-                    
-                    records = []
-                    for record in result.to_dict('records'):
-                        serialized_record = {}
-                        for key, value in record.items():
-                            serialized_record[key] = convert_dates(value)
-                        records.append(serialized_record)
+                    # Convert to list of dictionaries
+                    columns = list(result.keys())
+                    data = []
+                    for row in rows:
+                        row_dict = {}
+                        for i, col in enumerate(columns):
+                            value = row[i]
+                            # Convert date/datetime objects to strings for JSON serialization
+                            if isinstance(value, (date, datetime)):
+                                value = value.isoformat()
+                            row_dict[col] = value
+                        data.append(row_dict)
                     
                     return {
                         'success': True,
-                        'data': records,
-                        'row_count': len(result),
-                        'columns': list(result.columns)
+                        'data': data,
+                        'row_count': len(data),
+                        'columns': columns
                     }
                 else:
                     result = conn.execute(text(query), params or {})
@@ -182,7 +177,7 @@ class DatabaseConnector:
                 )
                 ORDER BY schema_name
                 """
-            else:  # sqlserver
+            else:
                 query = """
                 SELECT name as database_name 
                 FROM sys.databases 
@@ -211,7 +206,6 @@ class DatabaseConnector:
                 }
         except Exception as e:
             logger.error(f"Error getting databases: {str(e)}")
-            # Return Aiven default databases if connection fails
             return {
                 'success': False,
                 'error': str(e),
