@@ -35,8 +35,8 @@ class DatabaseConnector:
         encoded_password = quote_plus(password)
         base_string = f"mysql+pymysql://{user}:{encoded_password}@{server}:{port}"
         
-        # Aiven SSL configuration
-        ssl_params = "ssl_ca=/app/ca.pem&ssl_verify_cert=true"
+        # Aiven SSL configuration - simplified for Render
+        ssl_params = "ssl_verify_cert=false&ssl_ca=/app/ca.pem"
         
         if self.database:
             return f"{base_string}/{self.database}?{ssl_params}"
@@ -70,11 +70,12 @@ class DatabaseConnector:
             logger.info(f"Creating engine for {self.db_type} - Aiven MySQL")
             
             if self.db_type == "mysql":
+                # Simplified SSL args for Render
                 ssl_args = {
                     "ssl": {
                         "ca": "/app/ca.pem",
-                        "check_hostname": True,
-                        "verify_mode": True
+                        "check_hostname": False,
+                        "verify_mode": False
                     }
                 }
                 self.engine = create_engine(
