@@ -9,16 +9,18 @@ class GeminiSQLGenerator:
     def __init__(self):
         # Configure Gemini with API key from environment
         api_key = os.getenv('GEMINI_API_KEY')
-        if api_key:
-            genai.configure(api_key=api_key)
-            logger.info(f"Using Gemini with API key authentication - Model: {config.GEMINI_MODEL}")
-        else:
-            # Fallback to application default credentials
-            genai.configure()
-            logger.info(f"Using Gemini with application default credentials - Model: {config.GEMINI_MODEL}")
+        if not api_key:
+            logger.error("GEMINI_API_KEY environment variable not set")
+            raise Exception("GEMINI_API_KEY environment variable is required")
         
-        self.model = genai.GenerativeModel(config.GEMINI_MODEL)
-        self.schema_cache = {}  # Cache schemas by database
+        try:
+            genai.configure(api_key=api_key)
+            self.model = genai.GenerativeModel(config.GEMINI_MODEL)
+            self.schema_cache = {}
+            logger.info(f"Gemini configured successfully with model: {config.GEMINI_MODEL}")
+        except Exception as e:
+            logger.error(f"Failed to configure Gemini: {str(e)}")
+            raise
     
     def get_schema_context(self, db_connector, database=None):
         """
@@ -83,10 +85,11 @@ Common Query Examples for ecommerce:
         Get the main table name for a database
         """
         table_mapping = {
-            "healthcare": "healthcare_table",
-            "ecommerce": "ecommerce_table"
+            "healthcare": "healthcare_data",
+            "ecommerce": "ecommerce_data",
+            "defaultdb": "ecommerce_data"
         }
-        return table_mapping.get(database, "ecommerce_data")  # default to ecommerce_data
+        return table_mapping.get(database, "ecommerce_data")
     
     def clear_schema_cache(self, database=None):
         """Clear schema cache to force refresh"""
@@ -100,31 +103,31 @@ Common Query Examples for ecommerce:
     
     def generate_sql_query(self, natural_language_query, db_connector, database=None, conversation_history=None):
         """
-        Generate SQL query from natural language using Gemini 2.5 Flash
+        Generate SQL query from natural language using Gemini
         """
-        schema_context = self.get_schema_context(db_connector, database)
-        
-        system_prompt = f"""
-        You are a SQL expert. Generate SQL queries using ONLY the tables and columns that exist in the actual database schema.
-
-        {schema_context}
-
-        CRITICAL RULES:
-        1. Use ONLY the table names and column names shown in the schema above
-        2. Do NOT invent or assume table or column names that are not listed
-        3. Generate ONLY the SQL code, no explanations
-        4. Use LIMIT for row limits
-        5. If unsure about columns, use SELECT * but add LIMIT
-        6. Use backticks for column names with spaces or special characters
-        7. For SQL Server, use TOP instead of LIMIT
-        8. Use proper SQL syntax based on the database type
-
-        Natural Language Request: "{natural_language_query}"
-
-        SQL Query:
-        """
-        
         try:
+            schema_context = self.get_schema_context(db_connector, database)
+            
+            system_prompt = f"""
+            You are a SQL expert. Generate SQL queries using ONLY the tables and columns that exist in the actual database schema.
+
+            {schema_context}
+
+            CRITICAL RULES:
+            1. Use ONLY the table names and column names shown in the schema above
+            2. Do NOT invent or assume table or column names that are not listed
+            3. Generate ONLY the SQL code, no explanations
+            4. Use LIMIT for row limits
+            5. If unsure about columns, use SELECT * but add LIMIT
+            6. Use backticks for column names with spaces or special characters
+            7. For SQL Server, use TOP instead of LIMIT
+            8. Use proper SQL syntax based on the database type
+
+            Natural Language Request: "{natural_language_query}"
+
+            SQL Query:
+            """
+            
             response = self.model.generate_content(
                 system_prompt,
                 generation_config={
@@ -135,7 +138,6 @@ Common Query Examples for ecommerce:
                 }
             )
             
-            # Better response handling for Gemini 2.5 Flash
             if response.candidates and len(response.candidates) > 0:
                 candidate = response.candidates[0]
                 if candidate.content and candidate.content.parts:
@@ -169,7 +171,7 @@ Common Query Examples for ecommerce:
                 }
             
         except Exception as e:
-            logger.error(f"Gemini 2.5 Flash query generation error: {str(e)}")
+            logger.error(f"Gemini query generation error: {str(e)}")
             return {
                 'success': False,
                 'error': f"Failed to generate SQL query: {str(e)}"
@@ -177,7 +179,7 @@ Common Query Examples for ecommerce:
     
     def explain_query_results(self, query, results_summary, database):
         """
-        Generate natural language explanation of query results using Gemini 2.5 Flash
+        Generate natural language explanation of query results using Gemini
         """
         try:
             prompt = f"""
@@ -204,4 +206,8 @@ Common Query Examples for ecommerce:
             return "Unable to generate explanation for the results."
 
 # Singleton instance
-gemini_client = GeminiSQLGenerator()
+try:
+    gemini_client = GeminiSQLGenerator()
+except Exception as e:
+    logger.error(f"Failed to initialize Gemini client: {str(e)}")
+    gemini_client = None
