@@ -27,7 +27,7 @@ class DatabaseConnector:
             return self._build_mysql_connection_string()
     
     def _build_mysql_connection_string(self):
-        """Build MySQL connection string for Aiven with SSL"""
+        """Build MySQL connection string"""
         server = self.custom_config.get('server', config.DB_SERVER)
         port = self.custom_config.get('port', config.DB_PORT)
         user = self.custom_config.get('user', config.DB_USER)
@@ -36,13 +36,14 @@ class DatabaseConnector:
         encoded_password = quote_plus(password)
         base_string = f"mysql+pymysql://{user}:{encoded_password}@{server}:{port}"
         
-        # Check if this is TiDB Cloud (no SSL required) or Aiven (SSL required)
+        # Check if this is TiDB Cloud
         if 'tidbcloud' in server.lower():
-            # TiDB Cloud - no SSL required
+            # TiDB Cloud - SSL required but handled differently
+            ssl_params = "ssl_verify_cert=true&ssl_ca=/app/ca.pem"
             if self.database:
-                return f"{base_string}/{self.database}"
+                return f"{base_string}/{self.database}?{ssl_params}"
             else:
-                return f"{base_string}/"
+                return f"{base_string}/?{ssl_params}"
         else:
             # Aiven MySQL - SSL required
             ssl_params = "ssl_verify_cert=false&ssl_ca=/app/ca.pem"
@@ -76,13 +77,15 @@ class DatabaseConnector:
         try:
             connection_string = self._build_connection_string()
             logger.info(f"Creating engine for {self.db_type}")
-            logger.info(f"Connection string: {connection_string.split('//')[0]}//***:***@{connection_string.split('@')[1] if '@' in connection_string else '***'}")
+            # Log connection info without password
+            safe_conn_str = connection_string.split('//')[0] + '//' + connection_string.split('//')[1].split('@')[0].split(':')[0] + ':***@' + connection_string.split('@')[1] if '@' in connection_string else '***'
+            logger.info(f"Connection string: {safe_conn_str}")
             
             if self.db_type == "mysql":
-                # Check if this is TiDB Cloud
                 server = self.custom_config.get('server', config.DB_SERVER)
+                
                 if 'tidbcloud' in server.lower():
-                    # TiDB Cloud configuration - no SSL
+                    # TiDB Cloud configuration - with SSL but different settings
                     self.engine = create_engine(
                         connection_string, 
                         pool_pre_ping=True,
@@ -91,9 +94,13 @@ class DatabaseConnector:
                         max_overflow=10,
                         pool_size=5,
                         connect_args={
-                            "connect_timeout": 15,
+                            "connect_timeout": 10,
                             "read_timeout": 30,
                             "write_timeout": 30,
+                            "ssl": {
+                                "ssl_disabled": False,
+                                "verify_ssl": True
+                            }
                         }
                     )
                 else:
@@ -155,7 +162,8 @@ class DatabaseConnector:
         connection = None
         start_time = time.time()
         try:
-            logger.info(f"Attempting database connection to {self.custom_config.get('server', config.DB_SERVER)}...")
+            server_info = self.custom_config.get('server', config.DB_SERVER)
+            logger.info(f"Attempting database connection to {server_info}...")
             connection = self.engine.connect()
             connect_time = time.time() - start_time
             logger.info(f"Database connection established in {connect_time:.2f}s")
