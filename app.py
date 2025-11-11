@@ -197,7 +197,534 @@ HTML_TEMPLATE = '''
     </div>
 
     <script>
-        // Your existing JavaScript code here...
+        let currentDatabase = null;
+        let sessionId = 'session_' + Math.random().toString(36).substr(2, 9);
+        let currentConnectionInfo = null;
+        
+        // Check system status on load
+        async function checkSystemStatus() {
+            try {
+                console.log('Checking system status...');
+                const response = await fetch('/api/health');
+                const data = await response.json();
+                console.log('Health check response:', data);
+                
+                const dbStatus = document.getElementById('dbStatus');
+                const aiStatus = document.getElementById('aiStatus');
+                
+                // Update database status
+                if (data.database_connected) {
+                    dbStatus.className = 'px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm';
+                    dbStatus.innerHTML = '<i class="fas fa-database mr-1"></i>Database: Connected';
+                    console.log('Database connected successfully');
+                    
+                    // Load available databases
+                    await loadDatabases();
+                } else {
+                    dbStatus.className = 'px-3 py-1 bg-red-100 text-red-800 rounded-full text-sm';
+                    dbStatus.innerHTML = '<i class="fas fa-database mr-1"></i>Database: Failed';
+                    console.error('Database connection failed');
+                }
+                
+                // Update AI status
+                if (data.gemini_connected) {
+                    aiStatus.className = 'px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm';
+                    aiStatus.innerHTML = '<i class="fas fa-robot mr-1"></i>AI: Gemini Ready';
+                    console.log('Gemini AI connected successfully');
+                } else {
+                    aiStatus.className = 'px-3 py-1 bg-red-100 text-red-800 rounded-full text-sm';
+                    aiStatus.innerHTML = '<i class="fas fa-robot mr-1"></i>AI: Failed';
+                    console.error('Gemini AI connection failed - check API key');
+                }
+                
+            } catch (error) {
+                console.error('Status check failed:', error);
+                const dbStatus = document.getElementById('dbStatus');
+                const aiStatus = document.getElementById('aiStatus');
+                
+                dbStatus.className = 'px-3 py-1 bg-red-100 text-red-800 rounded-full text-sm';
+                dbStatus.innerHTML = '<i class="fas fa-database mr-1"></i>Database: Error';
+                
+                aiStatus.className = 'px-3 py-1 bg-red-100 text-red-800 rounded-full text-sm';
+                aiStatus.innerHTML = '<i class="fas fa-robot mr-1"></i>AI: Error';
+            }
+        }
+        
+        // Load available databases
+        async function loadDatabases() {
+            try {
+                console.log('Loading databases...');
+                const response = await fetch('/api/databases');
+                const data = await response.json();
+                console.log('Databases response:', data);
+                
+                const databaseList = document.getElementById('databaseList');
+                
+                if (data.success && data.databases.length > 0) {
+                    databaseList.innerHTML = ''; // Clear loading message
+                    data.databases.forEach(db => {
+                        const dbCard = document.createElement('div');
+                        dbCard.className = 'bg-blue-50 rounded-lg p-4 border border-blue-200 cursor-pointer hover:bg-blue-100 transition duration-200';
+                        dbCard.innerHTML = `
+                            <div class="flex items-center">
+                                <i class="fas fa-database text-blue-500 mr-3"></i>
+                                <div>
+                                    <h3 class="font-semibold text-blue-800">${db}</h3>
+                                    <p class="text-blue-600 text-sm">Click to select</p>
+                                </div>
+                            </div>
+                        `;
+                        dbCard.addEventListener('click', () => selectDatabase(db));
+                        databaseList.appendChild(dbCard);
+                    });
+                    console.log('Databases loaded successfully:', data.databases);
+                } else {
+                    databaseList.innerHTML = '<p class="text-gray-500 col-span-4 text-center py-4">No databases found or error loading databases.</p>';
+                    console.error('No databases found or error:', data.error);
+                }
+            } catch (error) {
+                console.error('Error loading databases:', error);
+                const databaseList = document.getElementById('databaseList');
+                databaseList.innerHTML = '<p class="text-red-500 col-span-4 text-center py-4">Error loading databases. Check console for details.</p>';
+            }
+        }
+        
+        // Select database
+        async function selectDatabase(database) {
+            console.log('Selecting database:', database);
+            currentDatabase = database;
+            
+            // Update UI
+            document.getElementById('selectedDb').classList.remove('hidden');
+            document.getElementById('selectedDb').innerHTML = `<i class="fas fa-table mr-1"></i>Database: ${database}`;
+            document.getElementById('queryFormSection').classList.remove('hidden');
+            document.getElementById('currentDbName').textContent = database;
+            
+            // Load database info
+            await loadDatabaseInfo(database);
+            
+            // Scroll to query form
+            document.getElementById('queryFormSection').scrollIntoView({ behavior: 'smooth' });
+        }
+        
+        // Load database information with column details
+        async function loadDatabaseInfo(database) {
+            try {
+                console.log('Loading database info for:', database);
+                const response = await fetch(`/api/databases/${database}/tables`);
+                const data = await response.json();
+                console.log('Database info response:', data);
+                
+                const databaseInfo = document.getElementById('databaseInfo');
+                const tablesList = document.getElementById('tablesList');
+                
+                if (data.success && Object.keys(data.tables).length > 0) {
+                    databaseInfo.classList.remove('hidden');
+                    
+                    let tablesHTML = `
+                        <div class="flex items-center mb-4">
+                            <i class="fas fa-info-circle mr-2"></i>
+                            <span class="font-semibold">Database Schema: ${database}</span>
+                            <span class="ml-2 px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs">
+                                ${data.table_count} table${data.table_count !== 1 ? 's' : ''}
+                            </span>
+                        </div>
+                    `;
+                    
+                    Object.entries(data.tables).forEach(([tableName, columns]) => {
+                        tablesHTML += `
+                            <div class="bg-white rounded-lg p-4 border border-blue-200 mb-4 shadow-sm">
+                                <div class="flex items-center justify-between mb-3">
+                                    <div class="flex items-center">
+                                        <i class="fas fa-table text-blue-500 mr-2"></i>
+                                        <span class="font-semibold text-blue-800 text-lg">${tableName}</span>
+                                    </div>
+                                    <span class="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs">
+                                        ${columns.length} column${columns.length !== 1 ? 's' : ''}
+                                    </span>
+                                </div>
+                                <div class="border-t border-gray-200 pt-3">
+                                    <p class="text-sm font-medium text-gray-700 mb-2">Columns:</p>
+                                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                                        ${columns.map(col => `
+                                            <div class="text-sm bg-gray-50 rounded-lg px-3 py-2 border border-gray-200 hover:bg-blue-50 transition-colors">
+                                                <div class="flex items-center justify-between">
+                                                    <span class="font-medium text-gray-900">${col.name}</span>
+                                                    <div class="flex space-x-1">
+                                                        ${col.primary_key ? '<span class="px-1 bg-green-100 text-green-800 rounded text-xs font-bold" title="Primary Key">PK</span>' : ''}
+                                                        ${!col.nullable ? '<span class="px-1 bg-red-100 text-red-800 rounded text-xs font-bold" title="Not Null">NN</span>' : ''}
+                                                    </div>
+                                                </div>
+                                                <div class="text-xs text-gray-500 mt-1">${col.type}</div>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    
+                    tablesList.innerHTML = tablesHTML;
+                } else {
+                    databaseInfo.classList.remove('hidden');
+                    tablesList.innerHTML = '<p class="text-blue-700 p-4 bg-blue-50 rounded-lg">No tables found in this database or error loading schema.</p>';
+                }
+            } catch (error) {
+                console.error('Error loading database info:', error);
+                const databaseInfo = document.getElementById('databaseInfo');
+                const tablesList = document.getElementById('tablesList');
+                databaseInfo.classList.remove('hidden');
+                tablesList.innerHTML = '<p class="text-red-700 p-4 bg-red-50 rounded-lg">Error loading database schema information. Check console for details.</p>';
+            }
+        }
+        
+        // Handle custom database connection
+        document.getElementById('connectCustomDb').addEventListener('click', async function() {
+            const server = document.getElementById('customServer').value;
+            const database = document.getElementById('customDatabase').value;
+            const username = document.getElementById('customUsername').value;
+            const password = document.getElementById('customPassword').value;
+            const port = document.getElementById('customPort').value;
+            const dbType = document.querySelector('input[name="dbType"]:checked').value;
+            
+            if (!server) {
+                alert('Please enter server address');
+                return;
+            }
+            
+            if (!username) {
+                alert('Please enter username');
+                return;
+            }
+            
+            if (!password) {
+                alert('Please enter password');
+                return;
+            }
+            
+            const connectBtn = document.getElementById('connectCustomDb');
+            const originalText = connectBtn.innerHTML;
+            
+            try {
+                // Show loading state
+                connectBtn.disabled = true;
+                connectBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Connecting...';
+                
+                const response = await fetch('/api/connect-custom', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        server: server,
+                        database: database,
+                        db_type: dbType,
+                        username: username,
+                        password: password,
+                        port: port
+                    })
+                });
+                
+                const data = await response.json();
+                console.log('Custom connection response:', data);
+                
+                if (data.success) {
+                    if (data.available_databases && data.available_databases.length > 0) {
+                        showDatabaseSelection(data.available_databases, server, dbType, data);
+                        alert('✅ Connection successful! Please select a database from the list below.');
+                    } else if (data.database) {
+                        selectDatabase(data.database);
+                        alert('✅ Connection successful! Database selected.');
+                    } else {
+                        alert('✅ Connected successfully but no databases found or selected.');
+                    }
+                    
+                    // Clear password for security
+                    document.getElementById('customPassword').value = '';
+                    
+                } else {
+                    alert('❌ Failed to connect: ' + data.error);
+                }
+            } catch (error) {
+                console.error('Connection error:', error);
+                alert('❌ Connection error: ' + error.message);
+            } finally {
+                // Restore button state
+                connectBtn.disabled = false;
+                connectBtn.innerHTML = originalText;
+            }
+        });
+
+        function showDatabaseSelection(databases, server, dbType, connectionData) {
+            const databaseList = document.getElementById('databaseList');
+            
+            // Clear existing custom databases to avoid duplicates
+            const existingCustomDbs = databaseList.querySelectorAll('.bg-green-50');
+            existingCustomDbs.forEach(db => db.remove());
+            
+            databases.forEach(db => {
+                const dbCard = document.createElement('div');
+                dbCard.className = 'bg-green-50 rounded-lg p-4 border border-green-200 cursor-pointer hover:bg-green-100 transition duration-200 mb-2';
+                dbCard.innerHTML = `
+                    <div class="flex items-center">
+                        <i class="fas fa-database text-green-500 mr-3"></i>
+                        <div>
+                            <h3 class="font-semibold text-green-800">${db}</h3>
+                            <p class="text-green-600 text-sm">Custom ${dbType.toUpperCase()} • ${server}</p>
+                        </div>
+                    </div>
+                `;
+                dbCard.addEventListener('click', () => {
+                    selectDatabase(db);
+                    // Store connection info for future queries
+                    currentConnectionInfo = {
+                        server: server,
+                        db_type: dbType,
+                        username: document.getElementById('customUsername').value,
+                        password: document.getElementById('customPassword').value
+                    };
+                });
+                databaseList.appendChild(dbCard);
+            });
+            
+            // Scroll to show the new databases
+            databaseList.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+        
+        // Handle form submission
+        document.getElementById('queryForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            if (!currentDatabase) {
+                alert('Please select a database first');
+                return;
+            }
+            await processQuery(document.getElementById('query').value, currentDatabase);
+        });
+
+        // Handle example buttons
+        document.querySelectorAll('.example-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                if (!currentDatabase) {
+                    alert('Please select a database first');
+                    return;
+                }
+                document.getElementById('query').value = this.textContent.trim();
+                processQuery(this.textContent.trim(), currentDatabase);
+            });
+        });
+
+        // Clear history
+        document.getElementById('clearHistory').addEventListener('click', function() {
+            sessionId = 'session_' + Math.random().toString(36).substr(2, 9);
+            document.getElementById('historySection').classList.add('hidden');
+            document.getElementById('historyList').innerHTML = '';
+        });
+
+        async function processQuery(query, database) {
+            const button = document.querySelector('#queryForm button');
+            const resultsDiv = document.getElementById('results');
+            
+            // Show loading state
+            button.disabled = true;
+            button.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Generating SQL with Gemini...';
+            resultsDiv.classList.add('hidden');
+            
+            try {
+                const response = await fetch('/api/query', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ 
+                        query: query,
+                        database: database,
+                        session_id: sessionId 
+                    })
+                });
+                
+                const data = await response.json();
+                console.log('Query response:', data);
+                
+                if (data.success) {
+                    displaySuccessResults(data);
+                    addToHistory(query, data, database);
+                } else {
+                    displayError(data.error);
+                }
+                
+            } catch (error) {
+                console.error('Query error:', error);
+                displayError('Network error: ' + error.message);
+            } finally {
+                button.disabled = false;
+                button.innerHTML = '<i class="fas fa-paper-plane mr-2"></i>Generate & Execute SQL';
+            }
+        }
+
+        function displaySuccessResults(data) {
+            const resultsDiv = document.getElementById('results');
+            
+            resultsDiv.innerHTML = `
+                <div class="bg-white rounded-2xl shadow-lg p-6 space-y-6">
+                    <!-- Success Header -->
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center text-green-600">
+                            <i class="fas fa-check-circle text-2xl mr-3"></i>
+                            <h2 class="text-2xl font-semibold">Query Successful</h2>
+                        </div>
+                        <div class="flex space-x-2">
+                            <span class="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm">
+                                DB: ${data.database}
+                            </span>
+                            <span class="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm">
+                                ${data.execution_result.row_count} rows • ${data.execution_time_ms}ms
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <!-- AI Explanation -->
+                    <div class="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                        <h3 class="font-semibold text-blue-800 mb-2">
+                            <i class="fas fa-robot mr-2"></i>Gemini Analysis
+                        </h3>
+                        <p class="text-blue-700">${data.explanation || 'No explanation available'}</p>
+                    </div>
+                    
+                    <!-- SQL Query -->
+                    <div class="bg-gray-50 border border-gray-200 rounded-xl p-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <h3 class="font-semibold text-gray-800">
+                                <i class="fas fa-code mr-2"></i>Generated SQL
+                            </h3>
+                            <button onclick="copyToClipboard('${data.generated_sql.replace(/'/g, "\\'")}')" 
+                                    class="px-3 py-1 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300">
+                                <i class="fas fa-copy mr-1"></i>Copy
+                            </button>
+                        </div>
+                        <pre class="bg-gray-800 text-green-400 p-4 rounded-lg overflow-x-auto text-sm mt-2">${data.generated_sql}</pre>
+                    </div>
+                    
+                    <!-- Results Table -->
+                    <div class="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                        <h3 class="font-semibold text-gray-800 p-4 border-b border-gray-200">
+                            <i class="fas fa-table mr-2"></i>Query Results
+                            <span class="text-sm font-normal text-gray-600 ml-2">(${data.execution_result.row_count} rows)</span>
+                        </h3>
+                        <div class="p-4 overflow-x-auto">
+                            ${renderResultsTable(data.execution_result.data, data.execution_result.columns)}
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            resultsDiv.classList.remove('hidden');
+            resultsDiv.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function renderResultsTable(data, columns) {
+            if (!data || data.length === 0) {
+                return '<p class="text-gray-500">No data returned</p>';
+            }
+            
+            let tableHTML = `
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+            `;
+            
+            // Table headers
+            columns.forEach(col => {
+                tableHTML += `<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">${col}</th>`;
+            });
+            
+            tableHTML += `
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+            `;
+            
+            // Table rows (limit to 50 for display)
+            data.slice(0, 50).forEach(row => {
+                tableHTML += '<tr>';
+                columns.forEach(col => {
+                    const value = row[col];
+                    tableHTML += `<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${value !== null ? value : 'NULL'}</td>`;
+                });
+                tableHTML += '</tr>';
+            });
+            
+            tableHTML += `
+                    </tbody>
+                </table>
+            `;
+            
+            if (data.length > 50) {
+                tableHTML += `<p class="mt-2 text-sm text-gray-500">Showing 50 of ${data.length} rows</p>`;
+            }
+            
+            return tableHTML;
+        }
+
+        function displayError(error) {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = `
+                <div class="bg-red-50 border border-red-200 rounded-2xl p-6">
+                    <div class="flex items-center text-red-600 mb-3">
+                        <i class="fas fa-exclamation-triangle text-2xl mr-3"></i>
+                        <h2 class="text-2xl font-semibold">Error</h2>
+                    </div>
+                    <p class="text-red-700">${error}</p>
+                </div>
+            `;
+            resultsDiv.classList.remove('hidden');
+            resultsDiv.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function addToHistory(query, data, database) {
+            const historySection = document.getElementById('historySection');
+            const historyList = document.getElementById('historyList');
+            
+            historySection.classList.remove('hidden');
+            
+            const historyItem = document.createElement('div');
+            historyItem.className = 'bg-gray-50 rounded-lg p-4 border border-gray-200';
+            historyItem.innerHTML = `
+                <div class="flex justify-between items-start">
+                    <div class="flex-1">
+                        <div class="flex items-center mb-1">
+                            <span class="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs mr-2">${database}</span>
+                            <p class="font-medium text-gray-800">${query}</p>
+                        </div>
+                        <p class="text-sm text-gray-600">${data.execution_result.row_count} rows • ${data.execution_time_ms}ms</p>
+                    </div>
+                    <button onclick="this.closest('.bg-gray-50').remove()" class="text-gray-400 hover:text-gray-600 ml-2">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+            `;
+            
+            historyList.appendChild(historyItem);
+        }
+
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                const button = event.target;
+                const originalHTML = button.innerHTML;
+                button.innerHTML = '<i class="fas fa-check mr-1"></i>Copied!';
+                button.className = 'px-3 py-1 bg-green-200 text-green-800 rounded-lg text-sm';
+                
+                setTimeout(() => {
+                    button.innerHTML = originalHTML;
+                    button.className = 'px-3 py-1 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300';
+                }, 2000);
+            });
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Initializing SQL Query Assistant...');
+            checkSystemStatus();
+        });
     </script>
 </body>
 </html>
