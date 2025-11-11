@@ -203,55 +203,7 @@ HTML_TEMPLATE = '''
         let currentConnectionInfo = null;
         
         // Check system status on load
-        async function checkSystemStatus() {
-            try {
-                console.log('Checking system status...');
-                const response = await fetch('/api/health');
-                const data = await response.json();
-                console.log('Health check response:', data);
-                
-                const dbStatus = document.getElementById('dbStatus');
-                const aiStatus = document.getElementById('aiStatus');
-                
-                // Update database status
-                if (data.database_connected) {
-                    dbStatus.className = 'px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm';
-                    dbStatus.innerHTML = '<i class="fas fa-database mr-1"></i>Database: Connected';
-                    console.log('Database connected successfully');
-                    
-                    // Load available databases
-                    await loadDatabases();
-                } else {
-                    dbStatus.className = 'px-3 py-1 bg-red-100 text-red-800 rounded-full text-sm';
-                    dbStatus.innerHTML = '<i class="fas fa-database mr-1"></i>Database: Failed';
-                    console.error('Database connection failed');
-                }
-                
-                // Update AI status
-                if (data.gemini_connected) {
-                    aiStatus.className = 'px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm';
-                    aiStatus.innerHTML = '<i class="fas fa-robot mr-1"></i>AI: Gemini Ready';
-                    console.log('Gemini AI connected successfully');
-                } else {
-                    aiStatus.className = 'px-3 py-1 bg-red-100 text-red-800 rounded-full text-sm';
-                    aiStatus.innerHTML = '<i class="fas fa-robot mr-1"></i>AI: Failed';
-                    console.error('Gemini AI connection failed - check API key');
-                }
-                
-            } catch (error) {
-                console.error('Status check failed:', error);
-                const dbStatus = document.getElementById('dbStatus');
-                const aiStatus = document.getElementById('aiStatus');
-                
-                dbStatus.className = 'px-3 py-1 bg-red-100 text-red-800 rounded-full text-sm';
-                dbStatus.innerHTML = '<i class="fas fa-database mr-1"></i>Database: Error';
-                
-                aiStatus.className = 'px-3 py-1 bg-red-100 text-red-800 rounded-full text-sm';
-                aiStatus.innerHTML = '<i class="fas fa-robot mr-1"></i>AI: Error';
-            }
-        }
-        
-        // Load available databases
+        check
         async function loadDatabases() {
             try {
                 console.log('Loading databases...');
