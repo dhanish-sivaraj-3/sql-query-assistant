@@ -7,25 +7,35 @@ logger = logging.getLogger(__name__)
 
 class GeminiSQLGenerator:
     def __init__(self):
+        self.initialized = False
+        self.model = None
+        self.schema_cache = {}
+        
         # Configure Gemini with API key from environment
         api_key = os.getenv('GEMINI_API_KEY')
         if not api_key:
-            logger.error("GEMINI_API_KEY environment variable not set")
-            raise Exception("GEMINI_API_KEY environment variable is required")
+            logger.error("❌ GEMINI_API_KEY environment variable not set")
+            logger.error("Please set GEMINI_API_KEY in Render environment variables")
+            return
         
         try:
             genai.configure(api_key=api_key)
             self.model = genai.GenerativeModel(config.GEMINI_MODEL)
-            self.schema_cache = {}
-            logger.info(f"Gemini configured successfully with model: {config.GEMINI_MODEL}")
+            self.initialized = True
+            logger.info(f"✅ Gemini configured successfully with model: {config.GEMINI_MODEL}")
         except Exception as e:
-            logger.error(f"Failed to configure Gemini: {str(e)}")
-            raise
+            logger.error(f"❌ Failed to configure Gemini: {str(e)}")
+    
+    def is_initialized(self):
+        return self.initialized and self.model is not None
     
     def get_schema_context(self, db_connector, database=None):
         """
         Get database schema as context for Gemini
         """
+        if not self.is_initialized():
+            return "AI service not available. Please check Gemini API key configuration."
+            
         db = database or db_connector.database
         if not db:
             return "No database selected. Please select a database first."
@@ -105,6 +115,12 @@ Common Query Examples for ecommerce:
         """
         Generate SQL query from natural language using Gemini
         """
+        if not self.is_initialized():
+            return {
+                'success': False,
+                'error': "Gemini AI service not available. Please check if GEMINI_API_KEY is set in environment variables."
+            }
+            
         try:
             schema_context = self.get_schema_context(db_connector, database)
             
@@ -181,6 +197,9 @@ Common Query Examples for ecommerce:
         """
         Generate natural language explanation of query results using Gemini
         """
+        if not self.is_initialized():
+            return "AI service not available for explanation."
+            
         try:
             prompt = f"""
             Database: {database}
@@ -206,8 +225,4 @@ Common Query Examples for ecommerce:
             return "Unable to generate explanation for the results."
 
 # Singleton instance
-try:
-    gemini_client = GeminiSQLGenerator()
-except Exception as e:
-    logger.error(f"Failed to initialize Gemini client: {str(e)}")
-    gemini_client = None
+gemini_client = GeminiSQLGenerator()
