@@ -3,6 +3,7 @@ import logging
 from datetime import datetime
 import os
 import json
+import signal
 
 from config.settings import config
 from database.connector import db_connector, DatabaseConnector
@@ -80,7 +81,7 @@ HTML_TEMPLATE = '''
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Server</label>
-                        <input type="text" id="customServer" placeholder="e.g., DESKTOP-PL02DVO or 192.168.0.86" 
+                        <input type="text" id="customServer" placeholder="e.g., gateway01.ap-southeast-1.prod.aws.tidbcloud.com" 
                                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
                     </div>
                     <div>
@@ -378,7 +379,7 @@ HTML_TEMPLATE = '''
             }
         }
         
-        // Handle custom database connection
+        // Handle custom database connection with better error handling
         document.getElementById('connectCustomDb').addEventListener('click', async function() {
             const server = document.getElementById('customServer').value;
             const database = document.getElementById('customDatabase').value;
@@ -410,6 +411,10 @@ HTML_TEMPLATE = '''
                 connectBtn.disabled = true;
                 connectBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Connecting...';
                 
+                // Add timeout to fetch request
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+                
                 const response = await fetch('/api/connect-custom', {
                     method: 'POST',
                     headers: {
@@ -422,8 +427,19 @@ HTML_TEMPLATE = '''
                         username: username,
                         password: password,
                         port: port
-                    })
+                    }),
+                    signal: controller.signal
                 });
+                
+                clearTimeout(timeoutId);
+                
+                // Check if response is JSON
+                const contentType = response.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    const text = await response.text();
+                    console.error('Non-JSON response:', text.substring(0, 500));
+                    throw new Error('Server returned an error page. Check database credentials and connection details.');
+                }
                 
                 const data = await response.json();
                 console.log('Custom connection response:', data);
@@ -443,15 +459,22 @@ HTML_TEMPLATE = '''
                     document.getElementById('customPassword').value = '';
                     
                 } else {
-                    alert('❌ Failed to connect: ' + data.error);
+                    alert('❌ Failed to connect: ' + (data.error || 'Unknown error'));
                 }
             } catch (error) {
                 console.error('Connection error:', error);
-                alert('❌ Connection error: ' + error.message);
+                
+                if (error.name === 'AbortError') {
+                    alert('❌ Connection timeout: The database server took too long to respond. Please check the server address and try again.');
+                } else if (error.message.includes('JSON')) {
+                    alert('❌ Connection error: The database server returned an unexpected response. Please check your credentials and connection details.');
+                } else {
+                    alert('❌ Connection error: ' + error.message);
+                }
             } finally {
                 // Restore button state
                 connectBtn.disabled = false;
-                connectBtn.innerHTML = originalText;
+                connectBtn.innerHTML = '<i class="fas fa-link mr-2"></i>Connect to Custom Database';
             }
         });
 
@@ -788,61 +811,136 @@ def get_tables_with_columns(database):
 
 @app.route('/api/connect-custom', methods=['POST'])
 def connect_custom_database():
-    """Connect to a custom database (MySQL or SQL Server)"""
+    """Connect to a custom database with better error handling"""
     try:
         data = request.get_json()
-        server = data.get('server')
-        database = data.get('database')
+        server = data.get('server', '').strip()
+        database = data.get('database', '').strip()
         db_type = data.get('db_type', 'mysql')
-        username = data.get('username')
-        password = data.get('password')
-        port = data.get('port')
+        username = data.get('username', '').strip()
+        password = data.get('password', '').strip()
+        port = data.get('port', '').strip()
         
         logger.info(f"Custom connection attempt: {server} (Type: {db_type}, DB: {database})")
+        
+        # Validate required fields
+        if not server:
+            return jsonify({
+                "success": False, 
+                "error": "Server address is required"
+            }), 400
+            
+        if not username:
+            return jsonify({
+                "success": False, 
+                "error": "Username is required"
+            }), 400
+            
+        if not password:
+            return jsonify({
+                "success": False, 
+                "error": "Password is required"
+            }), 400
+        
+        # Set default ports if not provided
+        if not port:
+            port = '3306' if db_type == 'mysql' else '1433'
         
         custom_config = {
             'server': server,
             'user': username,
             'password': password,
-            'port': port or ('3306' if db_type == 'mysql' else '1433')
+            'port': port
         }
         
-        temp_connector = DatabaseConnector(
-            database=database,
-            db_type=db_type,
-            custom_config=custom_config
-        )
-        
-        if temp_connector.test_connection():
-            db_result = temp_connector.get_databases()
+        # Test connection with timeout
+        import signal
+        class TimeoutError(Exception):
+            pass
             
-            if db_result['success']:
-                return jsonify({
-                    "success": True,
-                    "message": f"Successfully connected to {server}",
-                    "database": database,
-                    "db_type": db_type,
-                    "available_databases": db_result['databases']
-                })
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Connection timeout")
+            
+        # Set timeout for connection test (20 seconds)
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(20)
+        
+        try:
+            temp_connector = DatabaseConnector(
+                database=database,
+                db_type=db_type,
+                custom_config=custom_config
+            )
+            
+            if temp_connector.test_connection():
+                db_result = temp_connector.get_databases()
+                signal.alarm(0)  # Cancel timeout
+                
+                if db_result['success']:
+                    return jsonify({
+                        "success": True,
+                        "message": f"Successfully connected to {server}",
+                        "database": database,
+                        "db_type": db_type,
+                        "available_databases": db_result['databases']
+                    })
+                else:
+                    return jsonify({
+                        "success": True,
+                        "message": f"Connected to server but could not list databases: {db_result.get('error', 'Unknown error')}",
+                        "database": database,
+                        "db_type": db_type,
+                        "available_databases": []
+                    })
             else:
+                signal.alarm(0)  # Cancel timeout
                 return jsonify({
-                    "success": True,
-                    "message": f"Connected to server but could not list databases",
-                    "database": database,
-                    "db_type": db_type,
-                    "available_databases": []
-                })
-        else:
+                    "success": False,
+                    "error": f"Failed to connect to server {server}. Please check credentials and network connectivity."
+                }), 400
+                
+        except TimeoutError:
+            logger.error(f"Connection timeout for {server}")
             return jsonify({
-                "success": False,
-                "error": f"Failed to connect to server {server}"
-            }), 400
+                "success": False, 
+                "error": f"Connection timeout to {server}. The server may be offline or network blocked."
+            }), 408
+        finally:
+            signal.alarm(0)  # Ensure timeout is always cancelled
             
     except Exception as e:
         logger.error(f"Custom connection error: {str(e)}")
+        
+        # Provide more specific error messages
+        error_msg = str(e)
+        if "SSL" in error_msg:
+            error_msg = "SSL connection error. Try disabling SSL or check certificate."
+        elif "timeout" in error_msg.lower():
+            error_msg = "Connection timeout. Check server address and network."
+        elif "access denied" in error_msg.lower():
+            error_msg = "Access denied. Check username and password."
+        elif "unknown host" in error_msg.lower():
+            error_msg = "Unknown server host. Check server address."
+            
         return jsonify({
             "success": False, 
-            "error": f"Connection failed: {str(e)}"
+            "error": f"Connection failed: {error_msg}"
+        }), 500
+
+@app.route('/api/test-connection', methods=['POST'])
+def test_connection():
+    """Simple connection test endpoint"""
+    try:
+        data = request.get_json()
+        # Simple test that returns quickly
+        return jsonify({
+            "success": True,
+            "message": "Connection test endpoint working"
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
         }), 500
 
 @app.route('/api/query', methods=['POST'])
