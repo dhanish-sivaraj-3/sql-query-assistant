@@ -198,7 +198,6 @@ HTML_TEMPLATE = '''
 
     <script>
         // Your existing JavaScript code here...
-        // (Keep all your existing JavaScript code)
     </script>
 </body>
 </html>
@@ -210,8 +209,12 @@ def home():
 
 @app.route('/api/health')
 def health():
-    """Health check endpoint"""
-    db_connected = db_connector.test_connection()
+    """Health check endpoint for Render"""
+    try:
+        db_connected = db_connector.test_connection()
+    except Exception as e:
+        logger.error(f"Database connection test failed: {e}")
+        db_connected = False
     
     # Test Gemini connection
     gemini_connected = False
@@ -232,10 +235,204 @@ def health():
         "timestamp": datetime.utcnow().isoformat()
     })
 
-# ... include all your other existing routes (get_databases, get_tables, connect_custom, query, etc.) ...
+@app.route('/api/databases')
+def get_databases():
+    """Get list of all available databases"""
+    try:
+        result = db_connector.get_databases()
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error getting databases: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "databases": config.DEFAULT_DATABASES
+        }), 500
+
+@app.route('/api/databases/<database>/tables')
+def get_tables_with_columns(database):
+    """Get tables for a specific database with column information"""
+    try:
+        result = db_connector.get_detailed_tables_info(database)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error getting tables for {database}: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/connect-custom', methods=['POST'])
+def connect_custom_database():
+    """Connect to a custom database (MySQL or SQL Server)"""
+    try:
+        data = request.get_json()
+        server = data.get('server')
+        database = data.get('database')
+        db_type = data.get('db_type', 'mysql')
+        username = data.get('username')
+        password = data.get('password')
+        port = data.get('port')
+        
+        logger.info(f"Custom connection attempt: {server} (Type: {db_type}, DB: {database})")
+        
+        custom_config = {
+            'server': server,
+            'user': username,
+            'password': password,
+            'port': port or ('3306' if db_type == 'mysql' else '1433')
+        }
+        
+        temp_connector = DatabaseConnector(
+            database=database,
+            db_type=db_type,
+            custom_config=custom_config
+        )
+        
+        if temp_connector.test_connection():
+            db_result = temp_connector.get_databases()
+            
+            if db_result['success']:
+                return jsonify({
+                    "success": True,
+                    "message": f"Successfully connected to {server}",
+                    "database": database,
+                    "db_type": db_type,
+                    "available_databases": db_result['databases']
+                })
+            else:
+                return jsonify({
+                    "success": True,
+                    "message": f"Connected to server but could not list databases",
+                    "database": database,
+                    "db_type": db_type,
+                    "available_databases": []
+                })
+        else:
+            return jsonify({
+                "success": False,
+                "error": f"Failed to connect to server {server}"
+            }), 400
+            
+    except Exception as e:
+        logger.error(f"Custom connection error: {str(e)}")
+        return jsonify({
+            "success": False, 
+            "error": f"Connection failed: {str(e)}"
+        }), 500
+
+@app.route('/api/query', methods=['POST'])
+def handle_query():
+    start_time = datetime.utcnow()
+    
+    try:
+        data = request.get_json()
+        query = data.get('query', '').strip()
+        database = data.get('database')
+        session_id = data.get('session_id', 'default')
+        
+        if not query:
+            return jsonify({"success": False, "error": "Query is required"}), 400
+        
+        if not database:
+            return jsonify({"success": False, "error": "Database selection is required"}), 400
+        
+        logger.info(f"Processing query for database {database}: {query}")
+        
+        db_connector.set_database(database)
+        
+        llm_result = gemini_client.generate_sql_query(
+            query, 
+            db_connector,
+            database
+        )
+        
+        if not llm_result['success']:
+            return jsonify({
+                "success": False,
+                "error": llm_result['error']
+            }), 500
+        
+        generated_sql = llm_result['sql_query']
+        
+        execution_result = db_connector.execute_query(generated_sql)
+        
+        if not execution_result['success']:
+            return jsonify({
+                "success": False,
+                "error": f"SQL execution failed: {execution_result['error']}",
+                "generated_sql": generated_sql
+            }), 500
+        
+        results_summary = {
+            'row_count': execution_result['row_count'],
+            'columns': execution_result['columns'],
+            'sample_data': execution_result['data'][:3] if execution_result['data'] else []
+        }
+        
+        explanation = gemini_client.explain_query_results(
+            query, 
+            json.dumps(results_summary),
+            database
+        )
+        
+        history_key = f"{session_id}_{database}"
+        if history_key not in conversation_history:
+            conversation_history[history_key] = []
+        
+        conversation_history[history_key].append({
+            'query': query,
+            'sql': generated_sql,
+            'timestamp': datetime.utcnow().isoformat()
+        })
+        
+        if len(conversation_history[history_key]) > 10:
+            conversation_history[history_key] = conversation_history[history_key][-10:]
+        
+        execution_time_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+        
+        return jsonify({
+            "success": True,
+            "natural_language_query": query,
+            "generated_sql": generated_sql,
+            "explanation": explanation,
+            "execution_result": {
+                "success": True,
+                "data": execution_result['data'],
+                "row_count": execution_result['row_count'],
+                "columns": execution_result['columns']
+            },
+            "execution_time_ms": round(execution_time_ms, 2),
+            "model_used": llm_result['model_used'],
+            "database": database,
+            "session_id": session_id
+        })
+        
+    except Exception as e:
+        logger.error(f"Error processing query: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": f"Server error: {str(e)}"
+        }), 500
+
+@app.route('/api/schema/<database>')
+def get_schema(database):
+    """Get database schema information"""
+    try:
+        result = db_connector.get_detailed_tables_info(database)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error fetching schema for {database}: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/clear-cache', methods=['POST'])
+def clear_cache():
+    """Clear Gemini schema cache"""
+    try:
+        gemini_client.clear_schema_cache()
+        return jsonify({"success": True, "message": "Cache cleared"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8000))
+    port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Starting Multi-Database SQL Query Assistant on port {port}")
     logger.info(f"📊 Default databases: {config.DEFAULT_DATABASES}")
     logger.info(f"🔗 Database server: {config.DB_SERVER}:{config.DB_PORT}")
