@@ -203,7 +203,45 @@ HTML_TEMPLATE = '''
         let currentConnectionInfo = null;
         
         // Check system status on load
-        check
+        async function checkSystemStatus() {
+            try {
+                console.log('Checking system status...');
+                const response = await fetch('/api/health');
+                const data = await response.json();
+                
+                // Update database status
+                const dbStatus = document.getElementById('dbStatus');
+                if (data.database_connected) {
+                    dbStatus.innerHTML = '<i class="fas fa-database mr-1"></i>Database: Connected';
+                    dbStatus.className = 'px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm';
+                } else {
+                    dbStatus.innerHTML = '<i class="fas fa-database mr-1"></i>Database: Disconnected';
+                    dbStatus.className = 'px-3 py-1 bg-red-100 text-red-800 rounded-full text-sm';
+                }
+                
+                // Update AI status
+                const aiStatus = document.getElementById('aiStatus');
+                if (data.gemini_connected) {
+                    aiStatus.innerHTML = '<i class="fas fa-robot mr-1"></i>AI: Connected';
+                    aiStatus.className = 'px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm';
+                } else {
+                    aiStatus.innerHTML = '<i class="fas fa-robot mr-1"></i>AI: Disconnected';
+                    aiStatus.className = 'px-3 py-1 bg-red-100 text-red-800 rounded-full text-sm';
+                }
+                
+                console.log('System status checked:', data);
+                
+                // Load databases after status check
+                await loadDatabases();
+                
+            } catch (error) {
+                console.error('Error checking system status:', error);
+                // Set both to error state
+                document.getElementById('dbStatus').innerHTML = '<i class="fas fa-database mr-1"></i>Database: Error';
+                document.getElementById('aiStatus').innerHTML = '<i class="fas fa-robot mr-1"></i>AI: Error';
+            }
+        }
+        
         async function loadDatabases() {
             try {
                 console.log('Loading databases...');
@@ -243,7 +281,6 @@ HTML_TEMPLATE = '''
         }
         
         // Select database
-        // In the selectDatabase function, add custom database handling
         async function selectDatabase(database, isCustom = false, serverInfo = null) {
             console.log('Selecting database:', database, 'Custom:', isCustom);
             currentDatabase = database;
@@ -258,6 +295,11 @@ HTML_TEMPLATE = '''
             document.getElementById('queryFormSection').classList.remove('hidden');
             document.getElementById('currentDbName').textContent = database;
             
+            // If this is a custom database, we need to ensure the backend uses the custom connection
+            if (isCustom && currentConnectionInfo) {
+                console.log('Using custom connection:', currentConnectionInfo);
+            }
+            
             // Load database info
             await loadDatabaseInfo(database);
             
@@ -265,7 +307,6 @@ HTML_TEMPLATE = '''
             document.getElementById('queryFormSection').scrollIntoView({ behavior: 'smooth' });
         }
         
-        // Update the showDatabaseSelection function
         function showDatabaseSelection(databases, server, dbType, connectionData) {
             const databaseList = document.getElementById('databaseList');
             
@@ -293,7 +334,7 @@ HTML_TEMPLATE = '''
                         db_type: dbType,
                         username: document.getElementById('customUsername').value,
                         password: document.getElementById('customPassword').value,
-                        port: document.getElementById('customPort').value || ('3306' if dbType === 'mysql' else '1433')
+                        port: document.getElementById('customPort').value || (dbType === 'mysql' ? '3306' : '1433')
                     };
                 });
                 databaseList.appendChild(dbCard);
@@ -302,17 +343,26 @@ HTML_TEMPLATE = '''
             // Scroll to show the new databases
             databaseList.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
+        
         async function loadDatabaseInfo(database) {
             try {
                 console.log('Loading database info for:', database);
-                const response = await fetch(`/api/databases/${database}/tables`);
+                
+                // If we have a custom connection, we might need to use a different endpoint
+                const url = `/api/databases/${encodeURIComponent(database)}/tables`;
+                const response = await fetch(url);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
                 const data = await response.json();
                 console.log('Database info response:', data);
                 
                 const databaseInfo = document.getElementById('databaseInfo');
                 const tablesList = document.getElementById('tablesList');
                 
-                if (data.success && Object.keys(data.tables).length > 0) {
+                if (data.success && data.tables && Object.keys(data.tables).length > 0) {
                     databaseInfo.classList.remove('hidden');
                     
                     let tablesHTML = `
@@ -361,7 +411,7 @@ HTML_TEMPLATE = '''
                     tablesList.innerHTML = tablesHTML;
                 } else {
                     databaseInfo.classList.remove('hidden');
-                    tablesList.innerHTML = '<p class="text-blue-700 p-4 bg-blue-50 rounded-lg">No tables found in this database or error loading schema.</p>';
+                    tablesList.innerHTML = `<p class="text-blue-700 p-4 bg-blue-50 rounded-lg">${data.error || 'No tables found in this database'}</p>`;
                 }
             } catch (error) {
                 console.error('Error loading database info:', error);
@@ -471,42 +521,6 @@ HTML_TEMPLATE = '''
             }
         });
 
-        function showDatabaseSelection(databases, server, dbType, connectionData) {
-            const databaseList = document.getElementById('databaseList');
-            
-            // Clear existing custom databases to avoid duplicates
-            const existingCustomDbs = databaseList.querySelectorAll('.bg-green-50');
-            existingCustomDbs.forEach(db => db.remove());
-            
-            databases.forEach(db => {
-                const dbCard = document.createElement('div');
-                dbCard.className = 'bg-green-50 rounded-lg p-4 border border-green-200 cursor-pointer hover:bg-green-100 transition duration-200 mb-2';
-                dbCard.innerHTML = `
-                    <div class="flex items-center">
-                        <i class="fas fa-database text-green-500 mr-3"></i>
-                        <div>
-                            <h3 class="font-semibold text-green-800">${db}</h3>
-                            <p class="text-green-600 text-sm">Custom ${dbType.toUpperCase()} • ${server}</p>
-                        </div>
-                    </div>
-                `;
-                dbCard.addEventListener('click', () => {
-                    selectDatabase(db);
-                    // Store connection info for future queries
-                    currentConnectionInfo = {
-                        server: server,
-                        db_type: dbType,
-                        username: document.getElementById('customUsername').value,
-                        password: document.getElementById('customPassword').value
-                    };
-                });
-                databaseList.appendChild(dbCard);
-            });
-            
-            // Scroll to show the new databases
-            databaseList.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }
-        
         // Handle form submission
         document.getElementById('queryForm').addEventListener('submit', async function(e) {
             e.preventDefault();
@@ -546,16 +560,23 @@ HTML_TEMPLATE = '''
             resultsDiv.classList.add('hidden');
             
             try {
+                const requestBody = { 
+                    query: query,
+                    database: database,
+                    session_id: sessionId 
+                };
+                
+                // Add custom connection info if available
+                if (currentConnectionInfo) {
+                    requestBody.custom_connection = currentConnectionInfo;
+                }
+                
                 const response = await fetch('/api/query', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ 
-                        query: query,
-                        database: database,
-                        session_id: sessionId 
-                    })
+                    body: JSON.stringify(requestBody)
                 });
                 
                 const data = await response.json();
@@ -914,6 +935,7 @@ def handle_query():
         query = data.get('query', '').strip()
         database = data.get('database')
         session_id = data.get('session_id', 'default')
+        custom_connection = data.get('custom_connection')
         
         if not query:
             return jsonify({"success": False, "error": "Query is required"}), 400
@@ -923,13 +945,28 @@ def handle_query():
         
         logger.info(f"Processing query for database {database}: {query}")
         
-        # Check if this is a custom database (contains custom connection info)
-        # For now, we'll use the main connector but set the database
-        db_connector.set_database(database)
+        # Use custom connection if provided, otherwise use default
+        if custom_connection:
+            # Create a temporary connector for custom database
+            temp_connector = DatabaseConnector(
+                database=database,
+                db_type=custom_connection.get('db_type', 'mysql'),
+                custom_config={
+                    'server': custom_connection.get('server'),
+                    'user': custom_connection.get('username'),
+                    'password': custom_connection.get('password'),
+                    'port': custom_connection.get('port', '3306')
+                }
+            )
+            current_connector = temp_connector
+        else:
+            # Use the default connector
+            db_connector.set_database(database)
+            current_connector = db_connector
         
         llm_result = gemini_client.generate_sql_query(
             query, 
-            db_connector,
+            current_connector,
             database
         )
         
@@ -941,7 +978,7 @@ def handle_query():
         
         generated_sql = llm_result['sql_query']
         
-        execution_result = db_connector.execute_query(generated_sql)
+        execution_result = current_connector.execute_query(generated_sql)
         
         if not execution_result['success']:
             return jsonify({
