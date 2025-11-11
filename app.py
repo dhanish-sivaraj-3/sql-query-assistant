@@ -291,13 +291,18 @@ HTML_TEMPLATE = '''
         }
         
         // Select database
-        async function selectDatabase(database) {
-            console.log('Selecting database:', database);
+        // In the selectDatabase function, add custom database handling
+        async function selectDatabase(database, isCustom = false, serverInfo = null) {
+            console.log('Selecting database:', database, 'Custom:', isCustom);
             currentDatabase = database;
             
             // Update UI
             document.getElementById('selectedDb').classList.remove('hidden');
-            document.getElementById('selectedDb').innerHTML = `<i class="fas fa-table mr-1"></i>Database: ${database}`;
+            if (isCustom && serverInfo) {
+                document.getElementById('selectedDb').innerHTML = `<i class="fas fa-table mr-1"></i>Database: ${database} (${serverInfo})`;
+            } else {
+                document.getElementById('selectedDb').innerHTML = `<i class="fas fa-table mr-1"></i>Database: ${database}`;
+            }
             document.getElementById('queryFormSection').classList.remove('hidden');
             document.getElementById('currentDbName').textContent = database;
             
@@ -308,7 +313,43 @@ HTML_TEMPLATE = '''
             document.getElementById('queryFormSection').scrollIntoView({ behavior: 'smooth' });
         }
         
-        // Load database information with column details
+        // Update the showDatabaseSelection function
+        function showDatabaseSelection(databases, server, dbType, connectionData) {
+            const databaseList = document.getElementById('databaseList');
+            
+            // Clear existing custom databases to avoid duplicates
+            const existingCustomDbs = databaseList.querySelectorAll('.bg-green-50');
+            existingCustomDbs.forEach(db => db.remove());
+            
+            databases.forEach(db => {
+                const dbCard = document.createElement('div');
+                dbCard.className = 'bg-green-50 rounded-lg p-4 border border-green-200 cursor-pointer hover:bg-green-100 transition duration-200 mb-2';
+                dbCard.innerHTML = `
+                    <div class="flex items-center">
+                        <i class="fas fa-database text-green-500 mr-3"></i>
+                        <div>
+                            <h3 class="font-semibold text-green-800">${db}</h3>
+                            <p class="text-green-600 text-sm">Custom ${dbType.toUpperCase()} • ${server}</p>
+                        </div>
+                    </div>
+                `;
+                dbCard.addEventListener('click', () => {
+                    selectDatabase(db, true, connectionData.server_info);
+                    // Store connection info for future queries
+                    currentConnectionInfo = {
+                        server: server,
+                        db_type: dbType,
+                        username: document.getElementById('customUsername').value,
+                        password: document.getElementById('customPassword').value,
+                        port: document.getElementById('customPort').value || ('3306' if dbType === 'mysql' else '1433')
+                    };
+                });
+                databaseList.appendChild(dbCard);
+            });
+            
+            // Scroll to show the new databases
+            databaseList.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
         async function loadDatabaseInfo(database) {
             try {
                 console.log('Loading database info for:', database);
@@ -811,7 +852,7 @@ def get_tables_with_columns(database):
 
 @app.route('/api/connect-custom', methods=['POST'])
 def connect_custom_database():
-    """Connect to a custom database with better error handling"""
+    """Connect to a custom database"""
     try:
         data = request.get_json()
         server = data.get('server', '').strip()
@@ -823,26 +864,14 @@ def connect_custom_database():
         
         logger.info(f"Custom connection attempt: {server} (Type: {db_type}, DB: {database})")
         
-        # Validate required fields
         if not server:
-            return jsonify({
-                "success": False, 
-                "error": "Server address is required"
-            }), 400
-            
+            return jsonify({"success": False, "error": "Server address is required"}), 400
         if not username:
-            return jsonify({
-                "success": False, 
-                "error": "Username is required"
-            }), 400
-            
+            return jsonify({"success": False, "error": "Username is required"}), 400
         if not password:
-            return jsonify({
-                "success": False, 
-                "error": "Password is required"
-            }), 400
+            return jsonify({"success": False, "error": "Password is required"}), 400
         
-        # Set default ports if not provided
+        # Set default port if not provided
         if not port:
             port = '3306' if db_type == 'mysql' else '1433'
         
@@ -853,78 +882,59 @@ def connect_custom_database():
             'port': port
         }
         
-        # Test connection with timeout
-        import signal
-        class TimeoutError(Exception):
-            pass
-            
-        def timeout_handler(signum, frame):
-            raise TimeoutError("Connection timeout")
-            
-        # Set timeout for connection test (20 seconds)
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(20)
+        # Test connection without specific database first
+        temp_connector = DatabaseConnector(
+            database=None,  # Connect without specific database first
+            db_type=db_type,
+            custom_config=custom_config
+        )
         
-        try:
-            temp_connector = DatabaseConnector(
-                database=database,
-                db_type=db_type,
-                custom_config=custom_config
-            )
+        if temp_connector.test_connection():
+            # Get available databases
+            db_result = temp_connector.get_databases()
             
-            if temp_connector.test_connection():
-                db_result = temp_connector.get_databases()
-                signal.alarm(0)  # Cancel timeout
+            if db_result['success']:
+                # If a specific database was provided, test connection to it
+                specific_db_success = False
+                if database and database in db_result['databases']:
+                    try:
+                        specific_connector = DatabaseConnector(
+                            database=database,
+                            db_type=db_type,
+                            custom_config=custom_config
+                        )
+                        specific_db_success = specific_connector.test_connection()
+                    except:
+                        specific_db_success = False
                 
-                if db_result['success']:
-                    return jsonify({
-                        "success": True,
-                        "message": f"Successfully connected to {server}",
-                        "database": database,
-                        "db_type": db_type,
-                        "available_databases": db_result['databases']
-                    })
-                else:
-                    return jsonify({
-                        "success": True,
-                        "message": f"Connected to server but could not list databases: {db_result.get('error', 'Unknown error')}",
-                        "database": database,
-                        "db_type": db_type,
-                        "available_databases": []
-                    })
-            else:
-                signal.alarm(0)  # Cancel timeout
                 return jsonify({
-                    "success": False,
-                    "error": f"Failed to connect to server {server}. Please check credentials and network connectivity."
-                }), 400
-                
-        except TimeoutError:
-            logger.error(f"Connection timeout for {server}")
+                    "success": True,
+                    "message": f"Successfully connected to {server}",
+                    "database": database if specific_db_success else None,
+                    "db_type": db_type,
+                    "available_databases": db_result['databases'],
+                    "server_info": f"{server}:{port}"
+                })
+            else:
+                return jsonify({
+                    "success": True,
+                    "message": f"Connected to server but could not list databases",
+                    "database": None,
+                    "db_type": db_type,
+                    "available_databases": [],
+                    "server_info": f"{server}:{port}"
+                })
+        else:
             return jsonify({
-                "success": False, 
-                "error": f"Connection timeout to {server}. The server may be offline or network blocked."
-            }), 408
-        finally:
-            signal.alarm(0)  # Ensure timeout is always cancelled
+                "success": False,
+                "error": f"Failed to connect to server {server}. Please check credentials."
+            }), 400
             
     except Exception as e:
         logger.error(f"Custom connection error: {str(e)}")
-        
-        # Provide more specific error messages
-        error_msg = str(e)
-        if "SSL" in error_msg:
-            error_msg = "SSL connection error. Try disabling SSL or check certificate."
-        elif "timeout" in error_msg.lower():
-            error_msg = "Connection timeout. Check server address and network."
-        elif "access denied" in error_msg.lower():
-            error_msg = "Access denied. Check username and password."
-        elif "unknown host" in error_msg.lower():
-            error_msg = "Unknown server host. Check server address."
-            
         return jsonify({
             "success": False, 
-            "error": f"Connection failed: {error_msg}"
+            "error": f"Connection failed: {str(e)}"
         }), 500
 
 @app.route('/api/test-connection', methods=['POST'])
@@ -961,6 +971,8 @@ def handle_query():
         
         logger.info(f"Processing query for database {database}: {query}")
         
+        # Check if this is a custom database (contains custom connection info)
+        # For now, we'll use the main connector but set the database
         db_connector.set_database(database)
         
         llm_result = gemini_client.generate_sql_query(
