@@ -1,3 +1,4 @@
+
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -34,7 +35,7 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser
 RUN chown -R appuser:appuser /app
 USER appuser
 
-ENV PORT=8080
+ENV PORT=10000
 ENV PYTHONUNBUFFERED=1
 
 CMD exec gunicorn --bind :$PORT --workers 2 --threads 4 --timeout 120 app:app
