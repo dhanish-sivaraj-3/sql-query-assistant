@@ -18,6 +18,9 @@ app = Flask(__name__)
 # Store conversation history per database
 conversation_history = {}
 
+# Store custom connections by database
+custom_connections = {}
+
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -295,11 +298,37 @@ HTML_TEMPLATE = '''
             document.getElementById('queryFormSection').classList.remove('hidden');
             document.getElementById('currentDbName').textContent = database;
             
+            // Store custom connection info globally for this database
+            if (isCustom && currentConnectionInfo) {
+                // Register this database with the custom connection
+                await registerCustomDatabase(database, currentConnectionInfo);
+            }
+            
             // Load database info
             await loadDatabaseInfo(database, isCustom);
             
             // Scroll to query form
             document.getElementById('queryFormSection').scrollIntoView({ behavior: 'smooth' });
+        }
+        
+        // Register custom database with backend
+        async function registerCustomDatabase(database, connectionInfo) {
+            try {
+                const response = await fetch('/api/register-custom-db', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        database: database,
+                        connection_info: connectionInfo
+                    })
+                });
+                const data = await response.json();
+                console.log('Custom database registration:', data);
+            } catch (error) {
+                console.error('Error registering custom database:', error);
+            }
         }
         
         function showDatabaseSelection(databases, server, dbType, connectionData) {
@@ -345,21 +374,15 @@ HTML_TEMPLATE = '''
                 
                 let url = `/api/databases/${encodeURIComponent(database)}/tables`;
                 
-                // If it's a custom database, we need to send connection info
-                const requestBody = { 
-                    database: database
-                };
-                
-                if (isCustom && currentConnectionInfo) {
-                    requestBody.custom_connection = currentConnectionInfo;
-                }
-                
                 const response = await fetch(url, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify(requestBody)
+                    body: JSON.stringify({
+                        database: database,
+                        is_custom: isCustom
+                    })
                 });
                 
                 if (!response.ok) {
@@ -836,20 +859,21 @@ def get_tables_with_columns(database):
     """Get tables for a specific database with column information"""
     try:
         data = request.get_json()
-        custom_connection = data.get('custom_connection')
+        is_custom = data.get('is_custom', False)
         
-        logger.info(f"Getting tables for {database}, custom: {custom_connection is not None}")
+        logger.info(f"Getting tables for {database}, custom: {is_custom}")
         
-        if custom_connection:
-            # Use custom connection
+        if is_custom and database in custom_connections:
+            # Use stored custom connection
+            connection_info = custom_connections[database]
             temp_connector = DatabaseConnector(
                 database=database,
-                db_type=custom_connection.get('db_type', 'mysql'),
+                db_type=connection_info.get('db_type', 'mysql'),
                 custom_config={
-                    'server': custom_connection.get('server'),
-                    'user': custom_connection.get('username'),
-                    'password': custom_connection.get('password'),
-                    'port': custom_connection.get('port', '3306')
+                    'server': connection_info.get('server'),
+                    'user': connection_info.get('username'),
+                    'password': connection_info.get('password'),
+                    'port': connection_info.get('port', '3306')
                 }
             )
             result = temp_connector.get_detailed_tables_info(database)
@@ -860,6 +884,25 @@ def get_tables_with_columns(database):
         return jsonify(result)
     except Exception as e:
         logger.error(f"Error getting tables for {database}: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/register-custom-db', methods=['POST'])
+def register_custom_database():
+    """Register a custom database connection"""
+    try:
+        data = request.get_json()
+        database = data.get('database')
+        connection_info = data.get('connection_info')
+        
+        if not database or not connection_info:
+            return jsonify({"success": False, "error": "Database and connection info are required"}), 400
+        
+        custom_connections[database] = connection_info
+        logger.info(f"Registered custom database: {database} with server: {connection_info.get('server')}")
+        
+        return jsonify({"success": True, "message": f"Custom database {database} registered"})
+    except Exception as e:
+        logger.error(f"Error registering custom database: {str(e)}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/api/connect-custom', methods=['POST'])
@@ -907,6 +950,16 @@ def connect_custom_database():
                 db_result = temp_connector.get_databases()
                 
                 if db_result['success']:
+                    # Store connection info for all available databases
+                    for db_name in db_result['databases']:
+                        custom_connections[db_name] = {
+                            'server': server,
+                            'db_type': db_type,
+                            'username': username,
+                            'password': password,
+                            'port': port
+                        }
+                    
                     # If a specific database was provided, test connection to it
                     specific_db_success = False
                     if database and database in db_result['databases']:
@@ -993,9 +1046,9 @@ def handle_query():
         
         logger.info(f"Processing query for database {database}: {query}")
         
-        # Use custom connection if provided, otherwise use default
+        # Use custom connection if provided, otherwise check if it's a registered custom database
         if custom_connection:
-            # Create a temporary connector for custom database
+            # Use provided custom connection
             temp_connector = DatabaseConnector(
                 database=database,
                 db_type=custom_connection.get('db_type', 'mysql'),
@@ -1004,6 +1057,20 @@ def handle_query():
                     'user': custom_connection.get('username'),
                     'password': custom_connection.get('password'),
                     'port': custom_connection.get('port', '3306')
+                }
+            )
+            current_connector = temp_connector
+        elif database in custom_connections:
+            # Use stored custom connection
+            connection_info = custom_connections[database]
+            temp_connector = DatabaseConnector(
+                database=database,
+                db_type=connection_info.get('db_type', 'mysql'),
+                custom_config={
+                    'server': connection_info.get('server'),
+                    'user': connection_info.get('username'),
+                    'password': connection_info.get('password'),
+                    'port': connection_info.get('port', '3306')
                 }
             )
             current_connector = temp_connector
@@ -1107,7 +1174,7 @@ def clear_cache():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
-    logger.info(f"🚀 Starting Multi-Database SQL Query Assistant on port {port}")
+    logger.info(f"🚀 Starting Multi-Database SQL Assistant on port {port}")
     logger.info(f"📊 Default databases: {config.DEFAULT_DATABASES}")
     logger.info(f"🔗 Database server: {config.DB_SERVER}:{config.DB_PORT}")
     app.run(host='0.0.0.0', port=port, debug=False)
