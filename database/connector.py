@@ -64,29 +64,33 @@ class DatabaseConnector:
             return f"mssql+pymssql://{user}:{password}@{server_clean}:{port}"
 
     def _create_engine(self):
-        """Create database engine with Aiven SSL support"""
-        try:
-            connection_string = self._build_connection_string()
-            logger.info(f"Creating engine for {self.db_type} - Aiven MySQL")
-            
-            if self.db_type == "mysql":
-                # Simplified SSL args for Render
-                ssl_args = {
-                    "ssl": {
-                        "ca": "/app/ca.pem",
-                        "check_hostname": False,
-                        "verify_mode": False
-                    }
+    """Create database engine with better timeout handling"""
+    try:
+        connection_string = self._build_connection_string()
+        logger.info(f"Creating engine for {self.db_type}")
+        
+        if self.db_type == "mysql":
+            # Enhanced SSL and timeout configuration
+            ssl_args = {
+                "ssl": {
+                    "ca": "/app/ca.pem",
+                    "check_hostname": False,
+                    "verify_mode": False
                 }
-                self.engine = create_engine(
-                    connection_string, 
-                    pool_pre_ping=True, 
-                    pool_recycle=3600,
-                    connect_args={
-                        "connect_timeout": 10,
-                        **ssl_args
-                    }
-                )
+            }
+            self.engine = create_engine(
+                connection_string, 
+                pool_pre_ping=True,
+                pool_recycle=300,  # Shorter recycle time
+                pool_timeout=30,   # 30 second timeout
+                max_overflow=10,   # Allow more connections
+                connect_args={
+                    "connect_timeout": 15,  # 15 second connection timeout
+                    "read_timeout": 30,     # 30 second read timeout
+                    "write_timeout": 30,    # 30 second write timeout
+                    **ssl_args
+                }
+            )
             else:
                 self.engine = create_engine(
                     connection_string,
