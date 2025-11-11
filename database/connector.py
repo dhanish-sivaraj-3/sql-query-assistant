@@ -36,13 +36,20 @@ class DatabaseConnector:
         encoded_password = quote_plus(password)
         base_string = f"mysql+pymysql://{user}:{encoded_password}@{server}:{port}"
         
-        # Aiven SSL configuration - simplified for Render
-        ssl_params = "ssl_verify_cert=false&ssl_ca=/app/ca.pem"
-        
-        if self.database:
-            return f"{base_string}/{self.database}?{ssl_params}"
+        # Check if this is TiDB Cloud (no SSL required) or Aiven (SSL required)
+        if 'tidbcloud' in server.lower():
+            # TiDB Cloud - no SSL required
+            if self.database:
+                return f"{base_string}/{self.database}"
+            else:
+                return f"{base_string}/"
         else:
-            return f"{base_string}/?{ssl_params}"
+            # Aiven MySQL - SSL required
+            ssl_params = "ssl_verify_cert=false&ssl_ca=/app/ca.pem"
+            if self.database:
+                return f"{base_string}/{self.database}?{ssl_params}"
+            else:
+                return f"{base_string}/?{ssl_params}"
     
     def _build_sqlserver_connection_string(self):
         """Build SQL Server connection string"""
@@ -69,30 +76,49 @@ class DatabaseConnector:
         try:
             connection_string = self._build_connection_string()
             logger.info(f"Creating engine for {self.db_type}")
+            logger.info(f"Connection string: {connection_string.split('//')[0]}//***:***@{connection_string.split('@')[1] if '@' in connection_string else '***'}")
             
             if self.db_type == "mysql":
-                # Enhanced SSL and timeout configuration
-                ssl_args = {
-                    "ssl": {
-                        "ca": "/app/ca.pem",
-                        "check_hostname": False,
-                        "verify_mode": False
+                # Check if this is TiDB Cloud
+                server = self.custom_config.get('server', config.DB_SERVER)
+                if 'tidbcloud' in server.lower():
+                    # TiDB Cloud configuration - no SSL
+                    self.engine = create_engine(
+                        connection_string, 
+                        pool_pre_ping=True,
+                        pool_recycle=300,
+                        pool_timeout=30,
+                        max_overflow=10,
+                        pool_size=5,
+                        connect_args={
+                            "connect_timeout": 15,
+                            "read_timeout": 30,
+                            "write_timeout": 30,
+                        }
+                    )
+                else:
+                    # Aiven MySQL configuration - with SSL
+                    ssl_args = {
+                        "ssl": {
+                            "ca": "/app/ca.pem",
+                            "check_hostname": False,
+                            "verify_mode": False
+                        }
                     }
-                }
-                self.engine = create_engine(
-                    connection_string, 
-                    pool_pre_ping=True,
-                    pool_recycle=300,  # Shorter recycle time
-                    pool_timeout=30,   # 30 second timeout
-                    max_overflow=10,   # Allow more connections
-                    pool_size=5,       # Base pool size
-                    connect_args={
-                        "connect_timeout": 15,  # 15 second connection timeout
-                        "read_timeout": 30,     # 30 second read timeout
-                        "write_timeout": 30,    # 30 second write timeout
-                        **ssl_args
-                    }
-                )
+                    self.engine = create_engine(
+                        connection_string, 
+                        pool_pre_ping=True,
+                        pool_recycle=300,
+                        pool_timeout=30,
+                        max_overflow=10,
+                        pool_size=5,
+                        connect_args={
+                            "connect_timeout": 15,
+                            "read_timeout": 30,
+                            "write_timeout": 30,
+                            **ssl_args
+                        }
+                    )
             else:
                 # SQL Server configuration
                 self.engine = create_engine(
@@ -103,7 +129,7 @@ class DatabaseConnector:
                     max_overflow=10,
                     pool_size=5,
                     connect_args={
-                        "timeout": 30  # General timeout for SQL Server
+                        "timeout": 30
                     }
                 )
                 
@@ -129,7 +155,7 @@ class DatabaseConnector:
         connection = None
         start_time = time.time()
         try:
-            logger.info(f"Attempting database connection...")
+            logger.info(f"Attempting database connection to {self.custom_config.get('server', config.DB_SERVER)}...")
             connection = self.engine.connect()
             connect_time = time.time() - start_time
             logger.info(f"Database connection established in {connect_time:.2f}s")
@@ -256,10 +282,6 @@ class DatabaseConnector:
             return {'success': False, 'error': 'No database selected'}
         
         try:
-            # Store current database to restore later
-            original_db = self.database
-            original_custom_config = self.custom_config.copy() if self.custom_config else {}
-            
             # Create a NEW connector for the specific database
             temp_connector = DatabaseConnector(
                 database=db,
@@ -272,16 +294,20 @@ class DatabaseConnector:
             
             tables_with_columns = {}
             for table in tables:
-                columns = inspector.get_columns(table)
-                tables_with_columns[table] = [
-                    {
-                        'name': col['name'],
-                        'type': str(col['type']),
-                        'nullable': col['nullable'],
-                        'primary_key': 'primary_key' in col and col['primary_key']
-                    }
-                    for col in columns
-                ]
+                try:
+                    columns = inspector.get_columns(table)
+                    tables_with_columns[table] = [
+                        {
+                            'name': col['name'],
+                            'type': str(col['type']),
+                            'nullable': col['nullable'],
+                            'primary_key': 'primary_key' in col and col['primary_key']
+                        }
+                        for col in columns
+                    ]
+                except Exception as e:
+                    logger.warning(f"Could not get columns for table {table}: {str(e)}")
+                    tables_with_columns[table] = []
             
             return {
                 'success': True,
