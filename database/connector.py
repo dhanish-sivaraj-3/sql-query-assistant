@@ -251,16 +251,23 @@ class DatabaseConnector:
     
     def get_detailed_tables_info(self, database=None):
         """Get detailed table information including column names"""
-        start_time = time.time()
         db = database or self.database
         if not db:
             return {'success': False, 'error': 'No database selected'}
         
         try:
-            current_db = self.database
-            self.set_database(db)
+            # Store current database to restore later
+            original_db = self.database
+            original_custom_config = self.custom_config.copy() if self.custom_config else {}
             
-            inspector = inspect(self.engine)
+            # Create a NEW connector for the specific database
+            temp_connector = DatabaseConnector(
+                database=db,
+                db_type=self.db_type,
+                custom_config=self.custom_config
+            )
+            
+            inspector = inspect(temp_connector.engine)
             tables = inspector.get_table_names()
             
             tables_with_columns = {}
@@ -276,27 +283,18 @@ class DatabaseConnector:
                     for col in columns
                 ]
             
-            if current_db:
-                self.set_database(current_db)
-            
-            execution_time = time.time() - start_time
-            logger.info(f"Retrieved schema for {db} in {execution_time:.2f}s: {len(tables)} tables")
-            
             return {
                 'success': True,
                 'tables': tables_with_columns,
                 'database': db,
                 'table_count': len(tables),
-                'db_type': self.db_type,
-                'execution_time': execution_time
+                'db_type': self.db_type
             }
         except Exception as e:
-            execution_time = time.time() - start_time
-            logger.error(f"Error getting detailed tables info for {db} after {execution_time:.2f}s: {str(e)}")
+            logger.error(f"Error getting detailed tables info for {db}: {str(e)}")
             return {
                 'success': False,
-                'error': str(e),
-                'execution_time': execution_time
+                'error': str(e)
             }
     
     def test_connection(self, database=None):
