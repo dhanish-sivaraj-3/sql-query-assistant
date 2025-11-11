@@ -18,9 +18,6 @@ app = Flask(__name__)
 # Store conversation history per database
 conversation_history = {}
 
-# Store custom connections
-custom_connections = {}
-
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -834,15 +831,14 @@ def get_databases():
             "databases": config.DEFAULT_DATABASES
         }), 500
 
-@app.route('/api/databases/<database>/tables', methods=['GET', 'POST'])
+@app.route('/api/databases/<database>/tables', methods=['POST'])
 def get_tables_with_columns(database):
     """Get tables for a specific database with column information"""
     try:
-        # Check if this is a POST request with custom connection info
-        custom_connection = None
-        if request.method == 'POST':
-            data = request.get_json()
-            custom_connection = data.get('custom_connection')
+        data = request.get_json()
+        custom_connection = data.get('custom_connection')
+        
+        logger.info(f"Getting tables for {database}, custom: {custom_connection is not None}")
         
         if custom_connection:
             # Use custom connection
