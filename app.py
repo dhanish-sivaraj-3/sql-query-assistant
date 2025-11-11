@@ -18,6 +18,9 @@ app = Flask(__name__)
 # Store conversation history per database
 conversation_history = {}
 
+# Store custom connections
+custom_connections = {}
+
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -295,13 +298,8 @@ HTML_TEMPLATE = '''
             document.getElementById('queryFormSection').classList.remove('hidden');
             document.getElementById('currentDbName').textContent = database;
             
-            // If this is a custom database, we need to ensure the backend uses the custom connection
-            if (isCustom && currentConnectionInfo) {
-                console.log('Using custom connection:', currentConnectionInfo);
-            }
-            
             // Load database info
-            await loadDatabaseInfo(database);
+            await loadDatabaseInfo(database, isCustom);
             
             // Scroll to query form
             document.getElementById('queryFormSection').scrollIntoView({ behavior: 'smooth' });
@@ -344,13 +342,28 @@ HTML_TEMPLATE = '''
             databaseList.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
         
-        async function loadDatabaseInfo(database) {
+        async function loadDatabaseInfo(database, isCustom = false) {
             try {
-                console.log('Loading database info for:', database);
+                console.log('Loading database info for:', database, 'Custom:', isCustom);
                 
-                // If we have a custom connection, we might need to use a different endpoint
-                const url = `/api/databases/${encodeURIComponent(database)}/tables`;
-                const response = await fetch(url);
+                let url = `/api/databases/${encodeURIComponent(database)}/tables`;
+                
+                // If it's a custom database, we need to send connection info
+                const requestBody = { 
+                    database: database
+                };
+                
+                if (isCustom && currentConnectionInfo) {
+                    requestBody.custom_connection = currentConnectionInfo;
+                }
+                
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(requestBody)
+                });
                 
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
@@ -492,7 +505,15 @@ HTML_TEMPLATE = '''
                         showDatabaseSelection(data.available_databases, server, dbType, data);
                         alert('✅ Connection successful! Please select a database from the list below.');
                     } else if (data.database) {
-                        selectDatabase(data.database);
+                        selectDatabase(data.database, true, data.server_info);
+                        // Store connection info for future queries
+                        currentConnectionInfo = {
+                            server: server,
+                            db_type: dbType,
+                            username: username,
+                            password: password,
+                            port: port || (dbType === 'mysql' ? '3306' : '1433')
+                        };
                         alert('✅ Connection successful! Database selected.');
                     } else {
                         alert('✅ Connected successfully but no databases found or selected.');
@@ -813,11 +834,33 @@ def get_databases():
             "databases": config.DEFAULT_DATABASES
         }), 500
 
-@app.route('/api/databases/<database>/tables')
+@app.route('/api/databases/<database>/tables', methods=['GET', 'POST'])
 def get_tables_with_columns(database):
     """Get tables for a specific database with column information"""
     try:
-        result = db_connector.get_detailed_tables_info(database)
+        # Check if this is a POST request with custom connection info
+        custom_connection = None
+        if request.method == 'POST':
+            data = request.get_json()
+            custom_connection = data.get('custom_connection')
+        
+        if custom_connection:
+            # Use custom connection
+            temp_connector = DatabaseConnector(
+                database=database,
+                db_type=custom_connection.get('db_type', 'mysql'),
+                custom_config={
+                    'server': custom_connection.get('server'),
+                    'user': custom_connection.get('username'),
+                    'password': custom_connection.get('password'),
+                    'port': custom_connection.get('port', '3306')
+                }
+            )
+            result = temp_connector.get_detailed_tables_info(database)
+        else:
+            # Use default connection
+            result = db_connector.get_detailed_tables_info(database)
+        
         return jsonify(result)
     except Exception as e:
         logger.error(f"Error getting tables for {database}: {str(e)}")
