@@ -874,7 +874,7 @@ def connect_custom_database():
         password = data.get('password', '').strip()
         port = data.get('port', '').strip()
         
-        logger.info(f"Custom connection attempt: {server} (Type: {db_type}, DB: {database})")
+        logger.info(f"Custom connection attempt: {server} (Type: {db_type}, DB: {database}, Port: {port})")
         
         if not server:
             return jsonify({"success": False, "error": "Server address is required"}), 400
@@ -885,7 +885,7 @@ def connect_custom_database():
         
         # Set default port if not provided
         if not port:
-            port = '3306' if db_type == 'mysql' else '1433'
+            port = '4000' if 'tidbcloud' in server.lower() else '3306'
         
         custom_config = {
             'server': server,
@@ -895,51 +895,60 @@ def connect_custom_database():
         }
         
         # Test connection without specific database first
-        temp_connector = DatabaseConnector(
-            database=None,  # Connect without specific database first
-            db_type=db_type,
-            custom_config=custom_config
-        )
-        
-        if temp_connector.test_connection():
-            # Get available databases
-            db_result = temp_connector.get_databases()
+        try:
+            temp_connector = DatabaseConnector(
+                database=None,  # Connect without specific database first
+                db_type=db_type,
+                custom_config=custom_config
+            )
             
-            if db_result['success']:
-                # If a specific database was provided, test connection to it
-                specific_db_success = False
-                if database and database in db_result['databases']:
-                    try:
-                        specific_connector = DatabaseConnector(
-                            database=database,
-                            db_type=db_type,
-                            custom_config=custom_config
-                        )
-                        specific_db_success = specific_connector.test_connection()
-                    except:
-                        specific_db_success = False
+            if temp_connector.test_connection():
+                # Get available databases
+                db_result = temp_connector.get_databases()
                 
-                return jsonify({
-                    "success": True,
-                    "message": f"Successfully connected to {server}",
-                    "database": database if specific_db_success else None,
-                    "db_type": db_type,
-                    "available_databases": db_result['databases'],
-                    "server_info": f"{server}:{port}"
-                })
+                if db_result['success']:
+                    # If a specific database was provided, test connection to it
+                    specific_db_success = False
+                    if database and database in db_result['databases']:
+                        try:
+                            specific_connector = DatabaseConnector(
+                                database=database,
+                                db_type=db_type,
+                                custom_config=custom_config
+                            )
+                            specific_db_success = specific_connector.test_connection()
+                        except Exception as specific_error:
+                            logger.error(f"Specific database connection failed: {specific_error}")
+                            specific_db_success = False
+                    
+                    return jsonify({
+                        "success": True,
+                        "message": f"Successfully connected to {server}",
+                        "database": database if specific_db_success else None,
+                        "db_type": db_type,
+                        "available_databases": db_result['databases'],
+                        "server_info": f"{server}:{port}"
+                    })
+                else:
+                    return jsonify({
+                        "success": True,
+                        "message": f"Connected to server but could not list databases: {db_result.get('error', 'Unknown error')}",
+                        "database": None,
+                        "db_type": db_type,
+                        "available_databases": [],
+                        "server_info": f"{server}:{port}"
+                    })
             else:
                 return jsonify({
-                    "success": True,
-                    "message": f"Connected to server but could not list databases",
-                    "database": None,
-                    "db_type": db_type,
-                    "available_databases": [],
-                    "server_info": f"{server}:{port}"
-                })
-        else:
+                    "success": False,
+                    "error": f"Failed to connect to server {server}. Please check credentials and ensure the server allows connections from Render."
+                }), 400
+                
+        except Exception as conn_error:
+            logger.error(f"Connection error details: {str(conn_error)}")
             return jsonify({
-                "success": False,
-                "error": f"Failed to connect to server {server}. Please check credentials."
+                "success": False, 
+                "error": f"Connection failed: {str(conn_error)}"
             }), 400
             
     except Exception as e:
