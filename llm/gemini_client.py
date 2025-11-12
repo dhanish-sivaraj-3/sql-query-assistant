@@ -36,24 +36,30 @@ class GeminiSQLGenerator:
         if not self.is_initialized():
             return "AI service not available. Please check Gemini API key configuration."
             
-        db = database or db_connector.database
+        db = database or getattr(db_connector, 'database', None)
         if not db:
             return "No database selected. Please select a database first."
         
-        if db not in self.schema_cache:
+        cache_key = f"{db}_{getattr(db_connector, 'db_type', 'mysql')}"
+        
+        if cache_key not in self.schema_cache:
             try:
+                # Test connection first
+                if not db_connector.test_connection(db):
+                    return f"Unable to connect to database {db}. Please check connection."
+                    
                 result = db_connector.get_detailed_tables_info(db)
                 if result['success']:
-                    self.schema_cache[db] = self._format_schema_info(result['tables'], db)
+                    self.schema_cache[cache_key] = self._format_schema_info(result['tables'], db)
                 else:
-                    logger.error(f"Failed to fetch schema information for {db}")
-                    self.schema_cache[db] = f"Unable to fetch schema information for {db}"
+                    logger.error(f"Failed to fetch schema information for {db}: {result.get('error')}")
+                    self.schema_cache[cache_key] = f"Unable to fetch schema information for {db}: {result.get('error', 'Unknown error')}"
             except Exception as e:
                 logger.error(f"Error getting schema for {db}: {e}")
-                self.schema_cache[db] = f"Schema information unavailable for {db}"
+                self.schema_cache[cache_key] = f"Schema information unavailable for {db}: {str(e)}"
         
-        return self.schema_cache[db]
-    
+        return self.schema_cache[cache_key]
+        
     def _format_schema_info(self, tables_data, database_name):
         """
         Format schema information for Gemini prompt with ACTUAL column names
@@ -122,13 +128,17 @@ Common Query Examples for ecommerce:
             }
             
         try:
+            # Use the provided db_connector (which could be custom) instead of creating a new one
             schema_context = self.get_schema_context(db_connector, database)
+            
+            # Determine database type for SQL syntax
+            db_type = getattr(db_connector, 'db_type', 'mysql')
             
             system_prompt = f"""
             You are a SQL expert. Generate SQL queries using ONLY the tables and columns that exist in the actual database schema.
-
+    
             {schema_context}
-
+    
             CRITICAL RULES:
             1. Use ONLY the table names and column names shown in the schema above
             2. Do NOT invent or assume table or column names that are not listed
@@ -138,9 +148,10 @@ Common Query Examples for ecommerce:
             6. Use backticks for column names with spaces or special characters
             7. For SQL Server, use TOP instead of LIMIT
             8. Use proper SQL syntax based on the database type
-
+            9. Current database type: {db_type.upper()}
+    
             Natural Language Request: "{natural_language_query}"
-
+    
             SQL Query:
             """
             
