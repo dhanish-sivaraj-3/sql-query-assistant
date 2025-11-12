@@ -1,3 +1,4 @@
+# Updated database/connector.py - TiDB Cloud with SSL
 import pymysql
 from sqlalchemy import create_engine, text, inspect
 from contextlib import contextmanager
@@ -8,6 +9,7 @@ from urllib.parse import quote_plus
 import json
 from datetime import date, datetime
 import time
+import ssl
 
 logger = logging.getLogger(__name__)
 
@@ -36,20 +38,11 @@ class DatabaseConnector:
         encoded_password = quote_plus(password)
         base_string = f"mysql+pymysql://{user}:{encoded_password}@{server}:{port}"
         
-        # Check if this is TiDB Cloud
-        if 'tidbcloud' in server.lower():
-            # TiDB Cloud - no SSL parameters in connection string
-            if self.database:
-                return f"{base_string}/{self.database}"
-            else:
-                return f"{base_string}/"
+        # For TiDB Cloud, we'll handle SSL in connect_args, not in connection string
+        if self.database:
+            return f"{base_string}/{self.database}"
         else:
-            # Aiven MySQL - SSL required
-            ssl_params = "ssl_verify_cert=false&ssl_ca=/app/ca.pem"
-            if self.database:
-                return f"{base_string}/{self.database}?{ssl_params}"
-            else:
-                return f"{base_string}/?{ssl_params}"
+            return f"{base_string}/"
     
     def _build_sqlserver_connection_string(self):
         """Build SQL Server connection string"""
@@ -85,7 +78,7 @@ class DatabaseConnector:
                 server = self.custom_config.get('server', config.DB_SERVER)
                 
                 if 'tidbcloud' in server.lower():
-                    # TiDB Cloud configuration - no SSL required
+                    # TiDB Cloud configuration - with SSL context
                     self.engine = create_engine(
                         connection_string, 
                         pool_pre_ping=True,
@@ -97,6 +90,10 @@ class DatabaseConnector:
                             "connect_timeout": 10,
                             "read_timeout": 30,
                             "write_timeout": 30,
+                            "ssl": {
+                                "ssl_disabled": False,
+                                "ca": None,  # Use system CA certificates
+                            }
                         }
                     )
                 else:
@@ -141,6 +138,7 @@ class DatabaseConnector:
         except Exception as e:
             logger.error(f"Engine creation failed: {str(e)}")
             raise
+
     
     def set_database(self, database):
         """Set active database"""
