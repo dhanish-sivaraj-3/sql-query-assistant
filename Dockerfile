@@ -1,4 +1,3 @@
-
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -27,8 +26,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code and SSL certificates
 COPY . .
-# Copy Aiven CA certificate to /app/ca.pem inside container
-COPY ca.pem /app/ca.pem
+
+# Ensure ca.pem is properly copied and has correct permissions
+RUN if [ -f "ca.pem" ]; then \
+        echo "✅ ca.pem found, copying to /app/ca.pem"; \
+        cp ca.pem /app/ca.pem && \
+        chmod 644 /app/ca.pem; \
+    else \
+        echo "❌ ca.pem not found in project root!"; \
+    fi
 
 # Create a non-root user to run the application
 RUN groupadd -r appuser && useradd -r -g appuser appuser
@@ -37,5 +43,9 @@ USER appuser
 
 ENV PORT=10000
 ENV PYTHONUNBUFFERED=1
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:$PORT/api/health || exit 1
 
 CMD exec gunicorn --bind :$PORT --workers 2 --threads 4 --timeout 120 app:app
