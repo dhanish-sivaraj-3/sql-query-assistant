@@ -660,7 +660,7 @@ HTML_TEMPLATE = '''
                                 DB: ${data.database}
                             </span>
                             <span class="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm">
-                                ${data.execution_result.row_count} rows • ${data.execution_time_ms}ms
+                                ${data.execution_result.} rows • ${data.execution_time_ms}ms
                             </span>
                         </div>
                     </div>
@@ -691,7 +691,7 @@ HTML_TEMPLATE = '''
                     <div class="bg-white border border-gray-200 rounded-xl overflow-hidden">
                         <h3 class="font-semibold text-gray-800 p-4 border-b border-gray-200">
                             <i class="fas fa-table mr-2"></i>Query Results
-                            <span class="text-sm font-normal text-gray-600 ml-2">(${data.execution_result.row_count} rows)</span>
+                            <span class="text-sm font-normal text-gray-600 ml-2">(${data.execution_result.} rows)</span>
                         </h3>
                         <div class="p-4 overflow-x-auto">
                             ${renderResultsTable(data.execution_result.data, data.execution_result.columns)}
@@ -778,7 +778,7 @@ HTML_TEMPLATE = '''
                             <span class="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs mr-2">${database}</span>
                             <p class="font-medium text-gray-800">${query}</p>
                         </div>
-                        <p class="text-sm text-gray-600">${data.execution_result.row_count} rows • ${data.execution_time_ms}ms</p>
+                        <p class="text-sm text-gray-600">${data.execution_result.} rows • ${data.execution_time_ms}ms</p>
                     </div>
                     <button onclick="this.closest('.bg-gray-50').remove()" class="text-gray-400 hover:text-gray-600 ml-2">
                         <i class="fas fa-times"></i>
@@ -1176,7 +1176,7 @@ def handle_query():
             "execution_result": {
                 "success": True,
                 "data": execution_result['data'],
-                "row_count': execution_result['row_count'],
+                "row_count": execution_result['row_count'],
                 "columns": execution_result['columns']
             },
             "execution_time_ms": round(execution_time_ms, 2),
