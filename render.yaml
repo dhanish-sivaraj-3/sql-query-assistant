@@ -5,8 +5,16 @@ services:
     plan: free
     buildCommand: |
       pip install -r requirements.txt
-      # Copy ca.pem to a known location
-      cp ca.pem /tmp/ca.pem || echo "ca.pem not found in root"
+      # List files to verify ca.pem is present
+      echo "📁 Files in repository:"
+      ls -la
+      echo "📁 Checking for ca.pem:"
+      if [ -f "ca.pem" ]; then
+        echo "✅ ca.pem found in root directory"
+        cat ca.pem | head -2
+      else
+        echo "❌ ca.pem not found!"
+      fi
     startCommand: gunicorn app:app
     envVars:
       - key: PORT
