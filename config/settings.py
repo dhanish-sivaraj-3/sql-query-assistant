@@ -15,7 +15,7 @@ class Config:
     MYSQL_SYSTEM_DATABASES = ["information_schema", "mysql", "performance_schema", "sys"]
     SQLSERVER_SYSTEM_DATABASES = ["master", "tempdb", "model", "msdb"]
     
-    GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')
+    GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash-exp')
     MAX_ROWS_RETURN = int(os.getenv('MAX_ROWS_RETURN', '1000'))
     QUERY_TIMEOUT = int(os.getenv('QUERY_TIMEOUT', '30'))
     
@@ -25,5 +25,13 @@ class Config:
     GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')  # MUST be set in environment
 
 config = Config()
+
+# Debug: Check if environment variables are loaded
+logger.info(f"Database Configuration:")
+logger.info(f"DB_SERVER: {config.DB_SERVER}")
+logger.info(f"DB_PORT: {config.DB_PORT}")
+logger.info(f"DB_USER: {config.DB_USER}")
+logger.info(f"DB_PASSWORD: {'***' if config.DB_PASSWORD else 'MISSING'}")
+logger.info(f"GEMINI_API_KEY: {'***' if config.GEMINI_API_KEY else 'MISSING'}")
 
 print("✅ Configuration loaded for Aiven MySQL & Render")
