@@ -1,4 +1,4 @@
-# Updated database/connector.py - TiDB Cloud with SSL
+# database/connector.py
 import pymysql
 from sqlalchemy import create_engine, text, inspect
 from contextlib import contextmanager
@@ -9,7 +9,6 @@ from urllib.parse import quote_plus
 import json
 from datetime import date, datetime
 import time
-import ssl
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +18,7 @@ class DatabaseConnector:
         self.db_type = db_type
         self.custom_config = custom_config or {}
         self.engine = None
+        self.connection_error = None
         self._create_engine()
     
     def _build_connection_string(self):
@@ -29,20 +29,34 @@ class DatabaseConnector:
             return self._build_mysql_connection_string()
     
     def _build_mysql_connection_string(self):
-        """Build MySQL connection string"""
+        """Build MySQL connection string for Aiven with SSL"""
         server = self.custom_config.get('server', config.DB_SERVER)
         port = self.custom_config.get('port', config.DB_PORT)
         user = self.custom_config.get('user', config.DB_USER)
         password = self.custom_config.get('password', config.DB_PASSWORD)
         
+        # Check if we have the required credentials
+        if not password:
+            logger.error("❌ Database password is missing!")
+            raise Exception("Database password is not configured. Please check your environment variables.")
+        
         encoded_password = quote_plus(password)
         base_string = f"mysql+pymysql://{user}:{encoded_password}@{server}:{port}"
         
-        # For TiDB Cloud, we'll handle SSL in connect_args, not in connection string
-        if self.database:
-            return f"{base_string}/{self.database}"
+        # Check if this is TiDB Cloud
+        if 'tidbcloud' in server.lower():
+            # TiDB Cloud - no SSL parameters in connection string
+            if self.database:
+                return f"{base_string}/{self.database}"
+            else:
+                return f"{base_string}/"
         else:
-            return f"{base_string}/"
+            # Aiven MySQL - SSL required
+            ssl_params = "ssl_verify_cert=true&ssl_ca=/app/ca.pem"
+            if self.database:
+                return f"{base_string}/{self.database}?{ssl_params}"
+            else:
+                return f"{base_string}/?{ssl_params}"
     
     def _build_sqlserver_connection_string(self):
         """Build SQL Server connection string"""
@@ -78,7 +92,7 @@ class DatabaseConnector:
                 server = self.custom_config.get('server', config.DB_SERVER)
                 
                 if 'tidbcloud' in server.lower():
-                    # TiDB Cloud configuration - with SSL context
+                    # TiDB Cloud configuration - no SSL required
                     self.engine = create_engine(
                         connection_string, 
                         pool_pre_ping=True,
@@ -90,10 +104,6 @@ class DatabaseConnector:
                             "connect_timeout": 10,
                             "read_timeout": 30,
                             "write_timeout": 30,
-                            "ssl": {
-                                "ssl_disabled": False,
-                                "ca": None,  # Use system CA certificates
-                            }
                         }
                     )
                 else:
@@ -133,12 +143,13 @@ class DatabaseConnector:
                     }
                 )
                 
-            logger.info("Database engine created successfully")
+            logger.info("✅ Database engine created successfully")
+            self.connection_error = None
             
         except Exception as e:
-            logger.error(f"Engine creation failed: {str(e)}")
-            raise
-
+            logger.error(f"❌ Engine creation failed: {str(e)}")
+            self.connection_error = str(e)
+            # Don't raise the exception immediately, allow graceful handling
     
     def set_database(self, database):
         """Set active database"""
@@ -156,15 +167,21 @@ class DatabaseConnector:
         connection = None
         start_time = time.time()
         try:
+            if not self.engine:
+                raise Exception("Database engine not initialized")
+                
             server_info = self.custom_config.get('server', config.DB_SERVER)
             logger.info(f"Attempting database connection to {server_info}...")
             connection = self.engine.connect()
             connect_time = time.time() - start_time
-            logger.info(f"Database connection established in {connect_time:.2f}s")
+            logger.info(f"✅ Database connection established in {connect_time:.2f}s")
+            self.connection_error = None
             yield connection
         except Exception as e:
             connect_time = time.time() - start_time
-            logger.error(f"Database connection error after {connect_time:.2f}s: {str(e)}")
+            error_msg = f"Database connection error after {connect_time:.2f}s: {str(e)}"
+            logger.error(error_msg)
+            self.connection_error = error_msg
             raise
         finally:
             if connection:
@@ -196,7 +213,7 @@ class DatabaseConnector:
                         data.append(row_dict)
                     
                     execution_time = time.time() - start_time
-                    logger.info(f"Query executed successfully in {execution_time:.2f}s, returned {len(data)} rows")
+                    logger.info(f"✅ Query executed successfully in {execution_time:.2f}s, returned {len(data)} rows")
                     
                     return {
                         'success': True,
@@ -209,7 +226,7 @@ class DatabaseConnector:
                     conn.commit()
                     
                     execution_time = time.time() - start_time
-                    logger.info(f"Query executed successfully in {execution_time:.2f}s, affected {result.rowcount} rows")
+                    logger.info(f"✅ Query executed successfully in {execution_time:.2f}s, affected {result.rowcount} rows")
                     
                     return {
                         'success': True,
@@ -217,10 +234,11 @@ class DatabaseConnector:
                     }
         except Exception as e:
             execution_time = time.time() - start_time
-            logger.error(f"Query execution error after {execution_time:.2f}s: {str(e)}")
+            error_msg = f"Query execution error after {execution_time:.2f}s: {str(e)}"
+            logger.error(error_msg)
             return {
                 'success': False,
-                'error': str(e),
+                'error': error_msg,
                 'execution_time': execution_time
             }
     
@@ -228,6 +246,15 @@ class DatabaseConnector:
         """Get list of all databases - FILTERED to show only user databases"""
         start_time = time.time()
         try:
+            if not self.engine:
+                return {
+                    'success': False,
+                    'error': self.connection_error or 'Database engine not initialized',
+                    'databases': config.DEFAULT_DATABASES,
+                    'server': self.custom_config.get('server', config.DB_SERVER),
+                    'execution_time': time.time() - start_time
+                }
+            
             if self.db_type == "mysql":
                 query = """
                 SELECT schema_name as database_name 
@@ -258,7 +285,7 @@ class DatabaseConnector:
                     databases = [row[0] for row in result]
                 
                 execution_time = time.time() - start_time
-                logger.info(f"Found {len(databases)} user databases in {execution_time:.2f}s: {databases}")
+                logger.info(f"✅ Found {len(databases)} user databases in {execution_time:.2f}s: {databases}")
                 
                 return {
                     'success': True,
@@ -270,10 +297,11 @@ class DatabaseConnector:
                 }
         except Exception as e:
             execution_time = time.time() - start_time
-            logger.error(f"Error getting databases after {execution_time:.2f}s: {str(e)}")
+            error_msg = f"Error getting databases after {execution_time:.2f}s: {str(e)}"
+            logger.error(error_msg)
             return {
                 'success': False,
-                'error': str(e),
+                'error': error_msg,
                 'databases': config.DEFAULT_DATABASES if self.db_type == "mysql" else [],
                 'server': self.custom_config.get('server', config.DB_SERVER),
                 'execution_time': execution_time
@@ -292,6 +320,9 @@ class DatabaseConnector:
                 db_type=self.db_type,
                 custom_config=self.custom_config
             )
+            
+            if temp_connector.connection_error:
+                return {'success': False, 'error': temp_connector.connection_error}
             
             inspector = inspect(temp_connector.engine)
             tables = inspector.get_table_names()
@@ -336,16 +367,19 @@ class DatabaseConnector:
             if db:
                 self.set_database(db)
             
+            if not self.engine:
+                return False
+                
             with self.get_connection() as conn:
                 # Simple test query
                 conn.execute(text("SELECT 1"))
             
             connection_time = time.time() - start_time
-            logger.info(f"Database connection test successful in {connection_time:.2f}s")
+            logger.info(f"✅ Database connection test successful in {connection_time:.2f}s")
             return True
         except Exception as e:
             connection_time = time.time() - start_time
-            logger.error(f"Database connection test failed after {connection_time:.2f}s: {str(e)}")
+            logger.error(f"❌ Database connection test failed after {connection_time:.2f}s: {str(e)}")
             return False
     
     def get_connection_info(self):
@@ -355,7 +389,8 @@ class DatabaseConnector:
             'port': self.custom_config.get('port', config.DB_PORT),
             'user': self.custom_config.get('user', config.DB_USER),
             'database': self.database,
-            'db_type': self.db_type
+            'db_type': self.db_type,
+            'connection_error': self.connection_error
         }
 
 # Global connector instance (default Aiven MySQL)
