@@ -1,4 +1,4 @@
-# database/connector.py
+# database/connector.py - Update the SSL configuration
 import pymysql
 from sqlalchemy import create_engine, text, inspect
 from contextlib import contextmanager
@@ -20,6 +20,23 @@ class DatabaseConnector:
         self.engine = None
         self.connection_error = None
         self._create_engine()
+    
+    def _find_ca_certificate(self):
+        """Find the CA certificate in various possible locations"""
+        possible_paths = [
+            '/app/ca.pem',  # Docker container path
+            '/opt/render/project/src/ca.pem',  # Render path
+            './ca.pem',  # Current directory
+            'ca.pem',  # Relative path
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                logger.info(f"✅ Found CA certificate at: {path}")
+                return path
+        
+        logger.error("❌ CA certificate not found in any expected location")
+        return None
     
     def _build_connection_string(self):
         """Build connection string based on database type"""
@@ -51,12 +68,11 @@ class DatabaseConnector:
             else:
                 return f"{base_string}/"
         else:
-            # Aiven MySQL - SSL required
-            ssl_params = "ssl_verify_cert=true&ssl_ca=/app/ca.pem"
+            # Aiven MySQL - SSL required but we'll handle it in connect_args
             if self.database:
-                return f"{base_string}/{self.database}?{ssl_params}"
+                return f"{base_string}/{self.database}"
             else:
-                return f"{base_string}/?{ssl_params}"
+                return f"{base_string}/"
     
     def _build_sqlserver_connection_string(self):
         """Build SQL Server connection string"""
@@ -108,13 +124,22 @@ class DatabaseConnector:
                     )
                 else:
                     # Aiven MySQL configuration - with SSL
-                    ssl_args = {
-                        "ssl": {
-                            "ca": "/app/ca.pem",
-                            "check_hostname": False,
-                            "verify_mode": False
+                    ca_path = self._find_ca_certificate()
+                    
+                    if ca_path:
+                        ssl_args = {
+                            "ssl": {
+                                "ca": ca_path,
+                                "check_hostname": False,
+                                "verify_mode": False
+                            }
                         }
-                    }
+                        logger.info(f"Using SSL with CA certificate: {ca_path}")
+                    else:
+                        # Try without SSL as fallback
+                        ssl_args = {}
+                        logger.warning("CA certificate not found, attempting connection without SSL")
+                    
                     self.engine = create_engine(
                         connection_string, 
                         pool_pre_ping=True,
@@ -149,7 +174,6 @@ class DatabaseConnector:
         except Exception as e:
             logger.error(f"❌ Engine creation failed: {str(e)}")
             self.connection_error = str(e)
-            # Don't raise the exception immediately, allow graceful handling
     
     def set_database(self, database):
         """Set active database"""
