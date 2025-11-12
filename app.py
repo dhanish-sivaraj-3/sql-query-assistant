@@ -372,17 +372,22 @@ HTML_TEMPLATE = '''
             try {
                 console.log('Loading database info for:', database, 'Custom:', isCustom);
                 
-                let url = `/api/databases/${encodeURIComponent(database)}/tables`;
+                const requestBody = {
+                    database: database,
+                    is_custom: isCustom
+                };
                 
-                const response = await fetch(url, {
+                // Add custom connection info if available
+                if (currentConnectionInfo) {
+                    requestBody.custom_connection = currentConnectionInfo;
+                }
+                
+                const response = await fetch(`/api/databases/${encodeURIComponent(database)}/tables`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({
-                        database: database,
-                        is_custom: isCustom
-                    })
+                    body: JSON.stringify(requestBody)
                 });
                 
                 if (!response.ok) {
@@ -607,7 +612,7 @@ HTML_TEMPLATE = '''
                     session_id: sessionId 
                 };
                 
-                // Add custom connection info if available
+                // Add custom connection info if available - THIS IS CRITICAL
                 if (currentConnectionInfo) {
                     requestBody.custom_connection = currentConnectionInfo;
                 }
@@ -860,10 +865,24 @@ def get_tables_with_columns(database):
     try:
         data = request.get_json()
         is_custom = data.get('is_custom', False)
+        custom_connection = data.get('custom_connection')  # Add this
         
         logger.info(f"Getting tables for {database}, custom: {is_custom}")
         
-        if is_custom and database in custom_connections:
+        if custom_connection:
+            # Use provided custom connection
+            temp_connector = DatabaseConnector(
+                database=database,
+                db_type=custom_connection.get('db_type', 'mysql'),
+                custom_config={
+                    'server': custom_connection.get('server'),
+                    'user': custom_connection.get('username'),
+                    'password': custom_connection.get('password'),  # Include password
+                    'port': custom_connection.get('port', '3306')
+                }
+            )
+            result = temp_connector.get_detailed_tables_info(database)
+        elif is_custom and database in custom_connections:
             # Use stored custom connection
             connection_info = custom_connections[database]
             temp_connector = DatabaseConnector(
@@ -872,7 +891,7 @@ def get_tables_with_columns(database):
                 custom_config={
                     'server': connection_info.get('server'),
                     'user': connection_info.get('username'),
-                    'password': connection_info.get('password'),
+                    'password': connection_info.get('password'),  # Include password
                     'port': connection_info.get('port', '3306')
                 }
             )
@@ -1046,39 +1065,50 @@ def handle_query():
         
         logger.info(f"Processing query for database {database}: {query}")
         
-        # Use custom connection if provided, otherwise check if it's a registered custom database
+        # Determine which connector to use
+        current_connector = None
+        
         if custom_connection:
-            # Use provided custom connection
-            temp_connector = DatabaseConnector(
+            # Use provided custom connection (from frontend)
+            logger.info(f"Using provided custom connection for {database}")
+            current_connector = DatabaseConnector(
                 database=database,
                 db_type=custom_connection.get('db_type', 'mysql'),
                 custom_config={
                     'server': custom_connection.get('server'),
                     'user': custom_connection.get('username'),
-                    'password': custom_connection.get('password'),
+                    'password': custom_connection.get('password'),  # Make sure password is included
                     'port': custom_connection.get('port', '3306')
                 }
             )
-            current_connector = temp_connector
         elif database in custom_connections:
             # Use stored custom connection
             connection_info = custom_connections[database]
-            temp_connector = DatabaseConnector(
+            logger.info(f"Using stored custom connection for {database}")
+            current_connector = DatabaseConnector(
                 database=database,
                 db_type=connection_info.get('db_type', 'mysql'),
                 custom_config={
                     'server': connection_info.get('server'),
                     'user': connection_info.get('username'),
-                    'password': connection_info.get('password'),
+                    'password': connection_info.get('password'),  # Make sure password is included
                     'port': connection_info.get('port', '3306')
                 }
             )
-            current_connector = temp_connector
         else:
             # Use the default connector
+            logger.info(f"Using default connector for {database}")
             db_connector.set_database(database)
             current_connector = db_connector
         
+        # Test the connection first
+        if not current_connector.test_connection():
+            return jsonify({
+                "success": False,
+                "error": f"Failed to connect to database {database}. Please check connection details."
+            }), 500
+        
+        # Generate SQL query using Gemini
         llm_result = gemini_client.generate_sql_query(
             query, 
             current_connector,
@@ -1092,7 +1122,9 @@ def handle_query():
             }), 500
         
         generated_sql = llm_result['sql_query']
+        logger.info(f"Generated SQL: {generated_sql}")
         
+        # Execute the query
         execution_result = current_connector.execute_query(generated_sql)
         
         if not execution_result['success']:
@@ -1102,18 +1134,21 @@ def handle_query():
                 "generated_sql": generated_sql
             }), 500
         
+        # Prepare results summary for explanation
         results_summary = {
             'row_count': execution_result['row_count'],
             'columns': execution_result['columns'],
             'sample_data': execution_result['data'][:3] if execution_result['data'] else []
         }
         
+        # Generate explanation
         explanation = gemini_client.explain_query_results(
             query, 
             json.dumps(results_summary),
             database
         )
         
+        # Update conversation history
         history_key = f"{session_id}_{database}"
         if history_key not in conversation_history:
             conversation_history[history_key] = []
