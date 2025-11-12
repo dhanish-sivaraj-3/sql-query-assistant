@@ -38,12 +38,11 @@ class DatabaseConnector:
         
         # Check if this is TiDB Cloud
         if 'tidbcloud' in server.lower():
-            # TiDB Cloud - SSL required but handled differently
-            ssl_params = "ssl_verify_cert=true&ssl_ca=/app/ca.pem"
+            # TiDB Cloud - no SSL parameters in connection string
             if self.database:
-                return f"{base_string}/{self.database}?{ssl_params}"
+                return f"{base_string}/{self.database}"
             else:
-                return f"{base_string}/?{ssl_params}"
+                return f"{base_string}/"
         else:
             # Aiven MySQL - SSL required
             ssl_params = "ssl_verify_cert=false&ssl_ca=/app/ca.pem"
@@ -77,6 +76,7 @@ class DatabaseConnector:
         try:
             connection_string = self._build_connection_string()
             logger.info(f"Creating engine for {self.db_type}")
+            
             # Log connection info without password
             safe_conn_str = connection_string.split('//')[0] + '//' + connection_string.split('//')[1].split('@')[0].split(':')[0] + ':***@' + connection_string.split('@')[1] if '@' in connection_string else '***'
             logger.info(f"Connection string: {safe_conn_str}")
@@ -85,7 +85,7 @@ class DatabaseConnector:
                 server = self.custom_config.get('server', config.DB_SERVER)
                 
                 if 'tidbcloud' in server.lower():
-                    # TiDB Cloud configuration - with SSL but different settings
+                    # TiDB Cloud configuration - no SSL required
                     self.engine = create_engine(
                         connection_string, 
                         pool_pre_ping=True,
@@ -97,10 +97,6 @@ class DatabaseConnector:
                             "connect_timeout": 10,
                             "read_timeout": 30,
                             "write_timeout": 30,
-                            "ssl": {
-                                "ssl_disabled": False,
-                                "verify_ssl": True
-                            }
                         }
                     )
                 else:
@@ -182,6 +178,8 @@ class DatabaseConnector:
         start_time = time.time()
         try:
             with self.get_connection() as conn:
+                logger.info(f"Executing query: {query}")
+                
                 if return_data:
                     result = conn.execute(text(query), params or {})
                     rows = result.fetchall()
