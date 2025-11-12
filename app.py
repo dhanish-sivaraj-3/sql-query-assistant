@@ -817,25 +817,30 @@ def health():
     """Health check endpoint for Render"""
     try:
         db_connected = db_connector.test_connection()
+        db_error = db_connector.connection_error
     except Exception as e:
         logger.error(f"Database connection test failed: {e}")
         db_connected = False
+        db_error = str(e)
     
     # Test Gemini connection
     gemini_connected = False
+    gemini_error = None
     try:
         test_response = gemini_client.model.generate_content("Test")
         gemini_connected = True
     except Exception as e:
         logger.error(f"Gemini connection test failed: {e}")
         gemini_connected = False
+        gemini_error = str(e)
     
     return jsonify({
-        "status": "healthy",
+        "status": "healthy" if db_connected and gemini_connected else "degraded",
         "service": "Multi-Database SQL Query Assistant",
-        "database_user": config.DB_USER,
         "database_connected": db_connected,
+        "database_error": db_error,
         "gemini_connected": gemini_connected,
+        "gemini_error": gemini_error,
         "default_databases": config.DEFAULT_DATABASES,
         "timestamp": datetime.utcnow().isoformat()
     })
