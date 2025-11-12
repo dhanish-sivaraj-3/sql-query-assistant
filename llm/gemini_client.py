@@ -87,6 +87,13 @@ Common Query Examples for ecommerce:
 - For sales analysis: SELECT product_name, quantity, unit_price FROM ecommerce_data
 - For order details: SELECT order_id, order_date, order_status, payment_method FROM ecommerce_data
 """
+        elif database_name == "customer" and "customer_table" in tables_data:
+            schema_text += """
+Common Query Examples for customer database:
+- Count records: SELECT COUNT(*) FROM customer_table
+- Get customer details: SELECT customer_id, first_name, last_name, email FROM customer_table
+- Find customers by location: SELECT first_name, last_name, city, country FROM customer_table WHERE city = 'value'
+"""
         
         return schema_text
     
@@ -96,10 +103,11 @@ Common Query Examples for ecommerce:
         """
         table_mapping = {
             "healthcare": "healthcare_data",
-            "ecommerce": "ecommerce_data",
+            "ecommerce": "ecommerce_data", 
+            "customer": "customer_table",
             "defaultdb": "ecommerce_data"
         }
-        return table_mapping.get(database, "ecommerce_data")
+        return table_mapping.get(database, "customer_table")
     
     def clear_schema_cache(self, database=None):
         """Clear schema cache to force refresh"""
@@ -124,25 +132,30 @@ Common Query Examples for ecommerce:
         try:
             schema_context = self.get_schema_context(db_connector, database)
             
+            # Improved system prompt focused purely on SQL generation
             system_prompt = f"""
-            You are a SQL expert. Generate SQL queries using ONLY the tables and columns that exist in the actual database schema.
+You are a SQL query generator. Your ONLY task is to convert natural language requests into valid SQL queries.
 
-            {schema_context}
+DATABASE SCHEMA:
+{schema_context}
 
-            CRITICAL RULES:
-            1. Use ONLY the table names and column names shown in the schema above
-            2. Do NOT invent or assume table or column names that are not listed
-            3. Generate ONLY the SQL code, no explanations
-            4. Use LIMIT for row limits
-            5. If unsure about columns, use SELECT * but add LIMIT
-            6. Use backticks for column names with spaces or special characters
-            7. For SQL Server, use TOP instead of LIMIT
-            8. Use proper SQL syntax based on the database type
+CRITICAL RULES:
+1. Use ONLY the table names and column names shown in the schema above
+2. Do NOT invent or assume table or column names that are not listed
+3. Generate ONLY the SQL code without any explanations, markdown, or additional text
+4. Use proper SQL syntax for MySQL
+5. Use backticks for column names with spaces or special characters
+6. Always include a LIMIT clause if not specified to prevent large result sets
+7. If counting records, use COUNT(*)
+8. Use proper WHERE clause syntax for filtering
 
-            Natural Language Request: "{natural_language_query}"
+Natural Language Request: "{natural_language_query}"
 
-            SQL Query:
-            """
+Generate ONLY the SQL query:
+"""
+            
+            logger.info(f"Generating SQL for: {natural_language_query}")
+            logger.info(f"Using database: {database}")
             
             response = self.model.generate_content(
                 system_prompt,
@@ -154,31 +167,46 @@ Common Query Examples for ecommerce:
                 }
             )
             
+            logger.info(f"Gemini response received: {response}")
+            
             if response.candidates and len(response.candidates) > 0:
                 candidate = response.candidates[0]
-                if candidate.content and candidate.content.parts:
-                    sql_query = candidate.content.parts[0].text.strip()
-                    
-                    # Clean up the query
-                    if sql_query.startswith("```sql"):
-                        sql_query = sql_query[6:]
-                    if sql_query.startswith("```"):
-                        sql_query = sql_query[3:]
-                    if sql_query.endswith("```"):
-                        sql_query = sql_query[:-3]
-                    
-                    return {
-                        'success': True,
-                        'sql_query': sql_query.strip(),
-                        'model_used': config.GEMINI_MODEL,
-                        'database': database
-                    }
+                logger.info(f"Candidate finish reason: {candidate.finish_reason}")
+                
+                if candidate.finish_reason == 1:  # STOP - successful completion
+                    if candidate.content and candidate.content.parts:
+                        sql_query = candidate.content.parts[0].text.strip()
+                        
+                        # Clean up the query - remove any markdown or explanations
+                        if sql_query.startswith("```sql"):
+                            sql_query = sql_query[6:]
+                        if sql_query.startswith("```"):
+                            sql_query = sql_query[3:]
+                        if sql_query.endswith("```"):
+                            sql_query = sql_query[:-3]
+                        
+                        # Remove any explanatory text after the SQL
+                        sql_query = sql_query.split(';')[0] + ';' if ';' in sql_query else sql_query
+                        sql_query = sql_query.split('\n')[0] if '\n' in sql_query else sql_query
+                        
+                        logger.info(f"Generated SQL: {sql_query}")
+                        
+                        return {
+                            'success': True,
+                            'sql_query': sql_query.strip(),
+                            'model_used': config.GEMINI_MODEL,
+                            'database': database
+                        }
+                    else:
+                        logger.error(f"No content parts in response")
+                        return {
+                            'success': False,
+                            'error': "AI model did not generate any SQL content."
+                        }
                 else:
-                    logger.error(f"No content parts in response. Finish reason: {candidate.finish_reason}")
-                    return {
-                        'success': False,
-                        'error': f"AI model did not generate content. Finish reason: {candidate.finish_reason}"
-                    }
+                    logger.error(f"Content generation blocked. Finish reason: {candidate.finish_reason}")
+                    # Try a simpler, more direct approach
+                    return self._generate_simple_sql(natural_language_query, database)
             else:
                 logger.error("No candidates in response")
                 return {
@@ -188,6 +216,47 @@ Common Query Examples for ecommerce:
             
         except Exception as e:
             logger.error(f"Gemini query generation error: {str(e)}")
+            # Fallback to simple SQL generation
+            return self._generate_simple_sql(natural_language_query, database)
+    
+    def _generate_simple_sql(self, natural_language_query, database):
+        """
+        Fallback method to generate simple SQL queries when Gemini fails
+        """
+        try:
+            # Simple rule-based SQL generation as fallback
+            query_lower = natural_language_query.lower()
+            
+            if "count" in query_lower and "record" in query_lower:
+                sql = f"SELECT COUNT(*) FROM customer_table;"
+            elif "count" in query_lower:
+                sql = f"SELECT COUNT(*) FROM customer_table;"
+            elif "top" in query_lower or "first" in query_lower:
+                # Extract number from query
+                import re
+                numbers = re.findall(r'\d+', natural_language_query)
+                limit = numbers[0] if numbers else "10"
+                sql = f"SELECT * FROM customer_table LIMIT {limit};"
+            elif "select" in query_lower and "from" in query_lower:
+                # If it already looks like SQL, use it as is
+                sql = natural_language_query
+                if not sql.endswith(';'):
+                    sql += ';'
+            else:
+                # Default select with limit
+                sql = f"SELECT * FROM customer_table LIMIT 10;"
+            
+            logger.info(f"Generated fallback SQL: {sql}")
+            
+            return {
+                'success': True,
+                'sql_query': sql,
+                'model_used': 'fallback',
+                'database': database
+            }
+            
+        except Exception as e:
+            logger.error(f"Fallback SQL generation failed: {str(e)}")
             return {
                 'success': False,
                 'error': f"Failed to generate SQL query: {str(e)}"
@@ -202,13 +271,15 @@ Common Query Examples for ecommerce:
             
         try:
             prompt = f"""
+            Explain these SQL query results in simple terms:
+            
             Database: {database}
-            User Question: {query}
+            Query: {query}
             
-            Query Results Summary: {results_summary}
+            Results: {results_summary}
             
-            Provide a concise, business-friendly explanation of these results in 2-3 sentences.
-            Focus on key insights and what the numbers mean.
+            Provide a brief, business-friendly explanation focusing on what the data shows.
+            Keep it to 2-3 sentences maximum.
             """
             
             response = self.model.generate_content(prompt)
@@ -218,11 +289,11 @@ Common Query Examples for ecommerce:
                 if candidate.content and candidate.content.parts:
                     return candidate.content.parts[0].text.strip()
             
-            return "Unable to generate explanation for the results."
+            return "Query executed successfully. Results are displayed above."
             
         except Exception as e:
             logger.error(f"Result explanation error: {str(e)}")
-            return "Unable to generate explanation for the results."
+            return "Query executed successfully. Results are displayed above."
 
 # Singleton instance
 gemini_client = GeminiSQLGenerator()
