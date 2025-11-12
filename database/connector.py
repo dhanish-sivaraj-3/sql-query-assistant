@@ -1,4 +1,4 @@
-# database/connector.py - Update the SSL configuration
+# database/connector.py
 import pymysql
 from sqlalchemy import create_engine, text, inspect
 from contextlib import contextmanager
@@ -24,19 +24,77 @@ class DatabaseConnector:
     def _find_ca_certificate(self):
         """Find the CA certificate in various possible locations"""
         possible_paths = [
-            '/app/ca.pem',  # Docker container path
-            '/opt/render/project/src/ca.pem',  # Render path
-            './ca.pem',  # Current directory
-            'ca.pem',  # Relative path
+            'ca.pem',  # Current directory (Render's project root)
+            './ca.pem',  # Relative path
+            '/opt/render/project/src/ca.pem',  # Render's absolute path
+            '/tmp/ca.pem',  # Temporary directory
         ]
         
         for path in possible_paths:
             if os.path.exists(path):
                 logger.info(f"✅ Found CA certificate at: {path}")
-                return path
+                # Verify the certificate is readable
+                try:
+                    with open(path, 'r') as f:
+                        content = f.read()
+                    if 'BEGIN CERTIFICATE' in content and 'END CERTIFICATE' in content:
+                        logger.info(f"✅ CA certificate is valid at: {path}")
+                        return path
+                    else:
+                        logger.error(f"❌ CA certificate at {path} appears to be invalid")
+                except Exception as e:
+                    logger.error(f"❌ Error reading CA certificate at {path}: {e}")
         
         logger.error("❌ CA certificate not found in any expected location")
+        
+        # Debug: List files in current directory
+        try:
+            current_dir = os.getcwd()
+            logger.info(f"📁 Current directory: {current_dir}")
+            logger.info(f"📁 Files in current directory: {os.listdir('.')}")
+        except Exception as e:
+            logger.error(f"❌ Error listing directory: {e}")
+            
         return None
+    
+    def _create_ca_certificate(self):
+        """Create a CA certificate file from a string if not found"""
+        ca_content = """-----BEGIN CERTIFICATE-----
+MIIEUDCCArigAwIBAgIUZ9U2RlwK6KBcKgx8Oe+IvooFF+4wDQYJKoZIhvcNAQEM
+BQAwQDE+MDwGA1UEAww1ZmQ4ZWI5YjktZmVhNi00ODBkLTkyOWQtOThiMThmMTJh
+MjFkIEdFTiAxIFByb2plY3QgQ0EwHhcNMjUxMTA0MTA0MDQwWhcNMzUxMTAyMTA0
+MDQwWjBAMT4wPAYDVQQDDDVmZDhlYjliOS1mZWE2LTQ4MGQtOTI5ZC05OGIxOGYx
+MmEyMWQgR0VOIDEgUHJvamVjdCBDQTCCAaIwDQYJKoZIhvcNAQEBBQADggGPADCC
+AYoCggGBAKBg4HvNG6gDWeQSwjfSylG3Z558FNw0M18KyF9OXdsVVhgjBOfNdsB0
+WEdRmhiSNs+7P8yYzhuueJGKG8CJRm12T06kDm4Zl5J7xIKldpzCBpycuIE1UbYf
+1bEpEb0E31oMWM4pA9Kd4xsVo7OQb81XGy3vCoSDR2DCaY/LUk2DliTMPvFKoLsr
+uLg3iy5I9sFmj579GA1vWumlLmn2zD7vzd6YURByNauJKxZ2D+NcVwgEYqymZQkl
+v24GsyJWcb3VVD7XcbYrpZJiEakkbvjG0c0sduRSPqRWGlG9p7Bne5tnvwRr3ZAO
+hIujo3Zq7nh8bUK6pKUGy/j9+E0sX5mpzmzpk1uHAr7vgMGqBR1WdRuXtIDMCwFk
+2/cPlDxpTc752yE6aZ0+mtvhk1r/x3WOewjiiX7KODJ9DQxtoxI7gGob1TFp8omV
+1K1g1M3QKQcV5ZH+JV52dJYCtT1o85OpOSKvUxGXiRX1yeuPe60NIWIC9I9DjNDL
+/i05euiszwIDAQABo0IwQDAdBgNVHQ4EFgQUT/qVyhyN6cCNFZLDHq0vYTYiE6Yw
+EgYDVR0TAQH/BAgwBgEB/wIBADALBgNVHQ8EBAMCAQYwDQYJKoZIhvcNAQEMBQAD
+ggGBAJ6348Gn8DikuNPsIiG+4GGqI2NFqYyAybpZBSmiHCCheUscZYUUja1qAOHz
+2JcolUtsxQfacGFaXtIURjJChmrUToQu9BSYiMT4F/Nn7BpcHWQCzyptF7u/hlBq
+MwI7Ftk/oN9iuk4I2CmNSncdxK4asDXyhPXNh4A9mtfkLlmFfpAyWa9bpNV6VLG8
+98QOdZmI0hrsKcStUcFQbXXnu/9VUp08qeMT/TQ1ZWn36Am9/fKSe3bxAMgFlgRj
+X/Qyj2orJ2H7cpIzWSXPirLOmctyb2bR9382jTSw2BqBxiesmUenke6MRBjBaR5k
+9+IADNyUcXRy9lkKxvovlgZDKaxrUTkmEPJgDpFYo0quDGig22LIFcwovH47ZeFK
+DAgPyFmEfFuTm/2SdooIjUskBb0by3QXFIZgHFuJ5CCe9Gh7jJ0talDTIF43M2RH
+IFKUPVHSOWTFuNs60NCR8LMaZb9pLg/0mNA7XH/zc+4DI/iJ0evaUiLAP878ChMO
+wkqhDg==
+-----END CERTIFICATE-----"""
+        
+        try:
+            # Try to create in current directory
+            with open('ca.pem', 'w') as f:
+                f.write(ca_content)
+            logger.info("✅ Created CA certificate file: ca.pem")
+            return 'ca.pem'
+        except Exception as e:
+            logger.error(f"❌ Failed to create CA certificate: {e}")
+            return None
     
     def _build_connection_string(self):
         """Build connection string based on database type"""
@@ -126,6 +184,10 @@ class DatabaseConnector:
                     # Aiven MySQL configuration - with SSL
                     ca_path = self._find_ca_certificate()
                     
+                    if not ca_path:
+                        logger.warning("CA certificate not found, attempting to create one...")
+                        ca_path = self._create_ca_certificate()
+                    
                     if ca_path:
                         ssl_args = {
                             "ssl": {
@@ -136,9 +198,14 @@ class DatabaseConnector:
                         }
                         logger.info(f"Using SSL with CA certificate: {ca_path}")
                     else:
-                        # Try without SSL as fallback
-                        ssl_args = {}
-                        logger.warning("CA certificate not found, attempting connection without SSL")
+                        # Try without SSL verification as last resort
+                        ssl_args = {
+                            "ssl": {
+                                "check_hostname": False,
+                                "verify_mode": False
+                            }
+                        }
+                        logger.warning("Using connection without CA certificate verification")
                     
                     self.engine = create_engine(
                         connection_string, 
@@ -174,6 +241,7 @@ class DatabaseConnector:
         except Exception as e:
             logger.error(f"❌ Engine creation failed: {str(e)}")
             self.connection_error = str(e)
+    
     
     def set_database(self, database):
         """Set active database"""
