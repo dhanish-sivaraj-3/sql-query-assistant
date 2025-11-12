@@ -3,10 +3,13 @@ services:
     name: sql-query-assistant
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    buildCommand: |
+      pip install -r requirements.txt
+      # Copy ca.pem to a known location
+      cp ca.pem /tmp/ca.pem || echo "ca.pem not found in root"
     startCommand: gunicorn app:app
     envVars:
       - key: PORT
-        value: 8000
+        value: 10000
       - key: PYTHON_VERSION
         value: 3.11.0
