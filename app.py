@@ -1177,6 +1177,33 @@ def clear_cache():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+@app.route('/api/debug')
+def debug_info():
+    """Debug endpoint to check configuration and connections"""
+    import os
+    
+    debug_info = {
+        "environment_variables": {
+            "DB_SERVER": os.getenv('DB_SERVER', 'MISSING'),
+            "DB_PORT": os.getenv('DB_PORT', 'MISSING'),
+            "DB_USER": os.getenv('DB_USER', 'MISSING'),
+            "DB_PASSWORD": "***" if os.getenv('DB_PASSWORD') else 'MISSING',
+            "GEMINI_API_KEY": "***" if os.getenv('GEMINI_API_KEY') else 'MISSING',
+            "PORT": os.getenv('PORT', 'MISSING'),
+        },
+        "file_system": {
+            "ca_pem_exists": os.path.exists('/app/ca.pem'),
+            "current_working_directory": os.getcwd(),
+            "files_in_app_dir": os.listdir('/app') if os.path.exists('/app') else 'Directory not found'
+        },
+        "database_connection": {
+            "default_connection_error": db_connector.connection_error,
+            "default_engine_created": db_connector.engine is not None
+        }
+    }
+    
+    return jsonify(debug_info)
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Starting Multi-Database SQL Assistant on port {port}")
