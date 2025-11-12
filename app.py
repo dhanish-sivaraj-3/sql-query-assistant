@@ -1077,7 +1077,7 @@ def handle_query():
                 custom_config={
                     'server': custom_connection.get('server'),
                     'user': custom_connection.get('username'),
-                    'password': custom_connection.get('password'),  # Make sure password is included
+                    'password': custom_connection.get('password'),
                     'port': custom_connection.get('port', '3306')
                 }
             )
@@ -1091,7 +1091,7 @@ def handle_query():
                 custom_config={
                     'server': connection_info.get('server'),
                     'user': connection_info.get('username'),
-                    'password': connection_info.get('password'),  # Make sure password is included
+                    'password': connection_info.get('password'),
                     'port': connection_info.get('port', '3306')
                 }
             )
@@ -1102,16 +1102,19 @@ def handle_query():
             current_connector = db_connector
         
         # Test the connection first
+        logger.info("Testing database connection...")
         if not current_connector.test_connection():
             return jsonify({
                 "success": False,
                 "error": f"Failed to connect to database {database}. Please check connection details."
             }), 500
         
-        # Generate SQL query using Gemini
+        logger.info("Database connection test successful, generating SQL with Gemini...")
+        
+        # Generate SQL query using Gemini - pass the current_connector
         llm_result = gemini_client.generate_sql_query(
             query, 
-            current_connector,
+            current_connector,  # Pass the actual connector we're using
             database
         )
         
@@ -1125,6 +1128,7 @@ def handle_query():
         logger.info(f"Generated SQL: {generated_sql}")
         
         # Execute the query
+        logger.info("Executing SQL query...")
         execution_result = current_connector.execute_query(generated_sql)
         
         if not execution_result['success']:
@@ -1172,7 +1176,7 @@ def handle_query():
             "execution_result": {
                 "success": True,
                 "data": execution_result['data'],
-                "row_count": execution_result['row_count'],
+                "row_count': execution_result['row_count'],
                 "columns": execution_result['columns']
             },
             "execution_time_ms": round(execution_time_ms, 2),
