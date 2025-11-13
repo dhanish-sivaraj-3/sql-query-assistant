@@ -892,13 +892,14 @@ def get_tables_with_columns(database):
         
         if custom_connection:
             # Use provided custom connection
+            logger.info(f"Using provided custom connection for tables - Password provided: {bool(custom_connection.get('password'))}")
             temp_connector = DatabaseConnector(
                 database=database,
                 db_type=custom_connection.get('db_type', 'mysql'),
                 custom_config={
                     'server': custom_connection.get('server'),
                     'user': custom_connection.get('username'),
-                    'password': custom_connection.get('password'),
+                    'password': custom_connection.get('password'),  # CRITICAL: Include password
                     'port': custom_connection.get('port', '3306')
                 }
             )
@@ -906,13 +907,14 @@ def get_tables_with_columns(database):
         elif is_custom and database in custom_connections:
             # Use stored custom connection
             connection_info = custom_connections[database]
+            logger.info(f"Using stored custom connection for tables - Password provided: {bool(connection_info.get('password'))}")
             temp_connector = DatabaseConnector(
                 database=database,
                 db_type=connection_info.get('db_type', 'mysql'),
                 custom_config={
                     'server': connection_info.get('server'),
                     'user': connection_info.get('username'),
-                    'password': connection_info.get('password'),
+                    'password': connection_info.get('password'),  # CRITICAL: Include password
                     'port': connection_info.get('port', '3306')
                 }
             )
@@ -1092,13 +1094,15 @@ def handle_query():
         if custom_connection:
             # Use provided custom connection (from frontend)
             logger.info(f"Using provided custom connection for {database}")
+            logger.info(f"Custom connection details - Server: {custom_connection.get('server')}, User: {custom_connection.get('username')}, Password provided: {bool(custom_connection.get('password'))}")
+            
             current_connector = DatabaseConnector(
                 database=database,
                 db_type=custom_connection.get('db_type', 'mysql'),
                 custom_config={
                     'server': custom_connection.get('server'),
                     'user': custom_connection.get('username'),
-                    'password': custom_connection.get('password'),
+                    'password': custom_connection.get('password'),  # CRITICAL: Make sure password is included
                     'port': custom_connection.get('port', '3306')
                 }
             )
@@ -1106,13 +1110,15 @@ def handle_query():
             # Use stored custom connection
             connection_info = custom_connections[database]
             logger.info(f"Using stored custom connection for {database}")
+            logger.info(f"Stored connection details - Server: {connection_info.get('server')}, User: {connection_info.get('username')}, Password provided: {bool(connection_info.get('password'))}")
+            
             current_connector = DatabaseConnector(
                 database=database,
                 db_type=connection_info.get('db_type', 'mysql'),
                 custom_config={
                     'server': connection_info.get('server'),
                     'user': connection_info.get('username'),
-                    'password': connection_info.get('password'),
+                    'password': connection_info.get('password'),  # CRITICAL: Make sure password is included
                     'port': connection_info.get('port', '3306')
                 }
             )
