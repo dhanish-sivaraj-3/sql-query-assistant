@@ -33,6 +33,13 @@ class DatabaseConnector:
         user = self.custom_config.get('user', config.DB_USER)
         password = self.custom_config.get('password', config.DB_PASSWORD)
         
+        # DEBUG: Log password presence
+        logger.info(f"Building MySQL connection - Server: {server}, User: {user}, Password provided: {bool(password)}")
+        
+        if not password:
+            logger.error("❌ NO PASSWORD PROVIDED for MySQL connection!")
+            raise Exception("Database password is required for MySQL connections")
+        
         encoded_password = quote_plus(password)
         base_string = f"mysql+pymysql://{user}:{encoded_password}@{server}:{port}"
         
@@ -60,7 +67,7 @@ class DatabaseConnector:
         password = self.custom_config.get('password', '')
         database = self.database or ''
         
-        logger.info(f"SQL Server Connection - Server: {server}, User: {user}, Database: {database}")
+        logger.info(f"SQL Server Connection - Server: {server}, User: {user}, Database: {database}, Password provided: {bool(password)}")
         
         if not server or not user or not password:
             raise Exception("SQL Server connection requires server, user, and password")
@@ -77,8 +84,15 @@ class DatabaseConnector:
         try:
             connection_string = self._build_connection_string()
             logger.info(f"Creating engine for {self.db_type}")
-            # Log connection info without password
-            safe_conn_str = connection_string.split('//')[0] + '//' + connection_string.split('//')[1].split('@')[0].split(':')[0] + ':***@' + connection_string.split('@')[1] if '@' in connection_string else '***'
+            
+            # Log connection info without password for security
+            safe_conn_str = connection_string
+            if '@' in connection_string:
+                parts = connection_string.split('@')
+                user_part = parts[0].split('//')[1] if '//' in parts[0] else parts[0]
+                user_part_hidden = user_part.split(':')[0] + ':***'
+                safe_conn_str = connection_string.split('//')[0] + '//' + user_part_hidden + '@' + parts[1]
+            
             logger.info(f"Connection string: {safe_conn_str}")
             
             if self.db_type == "mysql":
@@ -290,11 +304,11 @@ class DatabaseConnector:
             return {'success': False, 'error': 'No database selected'}
         
         try:
-            # Create a NEW connector for the specific database
+            # Create a NEW connector for the specific database with the SAME config
             temp_connector = DatabaseConnector(
                 database=db,
                 db_type=self.db_type,
-                custom_config=self.custom_config
+                custom_config=self.custom_config  # Pass the same config
             )
             
             inspector = inspect(temp_connector.engine)
@@ -338,11 +352,19 @@ class DatabaseConnector:
             db = database or self.database
             
             if db:
-                self.set_database(db)
-            
-            with self.get_connection() as conn:
-                # Simple test query
-                conn.execute(text("SELECT 1"))
+                # Create a new connector with the specific database
+                test_connector = DatabaseConnector(
+                    database=db,
+                    db_type=self.db_type,
+                    custom_config=self.custom_config
+                )
+                with test_connector.get_connection() as conn:
+                    # Simple test query
+                    conn.execute(text("SELECT 1"))
+            else:
+                with self.get_connection() as conn:
+                    # Simple test query
+                    conn.execute(text("SELECT 1"))
             
             connection_time = time.time() - start_time
             logger.info(f"Database connection test successful in {connection_time:.2f}s")
