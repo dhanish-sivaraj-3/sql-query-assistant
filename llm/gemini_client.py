@@ -59,7 +59,7 @@ class GeminiSQLGenerator:
                 self.schema_cache[cache_key] = f"Schema information unavailable for {db}: {str(e)}"
         
         return self.schema_cache[cache_key]
-        
+    
     def _format_schema_info(self, tables_data, database_name):
         """
         Format schema information for Gemini prompt with ACTUAL column names
@@ -110,8 +110,9 @@ Common Query Examples for ecommerce:
     def clear_schema_cache(self, database=None):
         """Clear schema cache to force refresh"""
         if database:
-            if database in self.schema_cache:
-                del self.schema_cache[database]
+            cache_key = f"{database}_mysql"  # Simple cache key for now
+            if cache_key in self.schema_cache:
+                del self.schema_cache[cache_key]
                 logger.info(f"Cleared schema cache for {database}")
         else:
             self.schema_cache.clear()
@@ -136,9 +137,9 @@ Common Query Examples for ecommerce:
             
             system_prompt = f"""
             You are a SQL expert. Generate SQL queries using ONLY the tables and columns that exist in the actual database schema.
-    
+
             {schema_context}
-    
+
             CRITICAL RULES:
             1. Use ONLY the table names and column names shown in the schema above
             2. Do NOT invent or assume table or column names that are not listed
@@ -149,9 +150,9 @@ Common Query Examples for ecommerce:
             7. For SQL Server, use TOP instead of LIMIT
             8. Use proper SQL syntax based on the database type
             9. Current database type: {db_type.upper()}
-    
+
             Natural Language Request: "{natural_language_query}"
-    
+
             SQL Query:
             """
             
