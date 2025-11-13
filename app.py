@@ -210,7 +210,13 @@ HTML_TEMPLATE = '''
             try {
                 console.log('Checking system status...');
                 const response = await fetch('/api/health');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
                 const data = await response.json();
+                console.log('System status response:', data);
                 
                 // Update database status
                 const dbStatus = document.getElementById('dbStatus');
@@ -232,7 +238,7 @@ HTML_TEMPLATE = '''
                     aiStatus.className = 'px-3 py-1 bg-red-100 text-red-800 rounded-full text-sm';
                 }
                 
-                console.log('System status checked:', data);
+                console.log('System status updated successfully');
                 
                 // Load databases after status check
                 await loadDatabases();
@@ -240,8 +246,14 @@ HTML_TEMPLATE = '''
             } catch (error) {
                 console.error('Error checking system status:', error);
                 // Set both to error state
-                document.getElementById('dbStatus').innerHTML = '<i class="fas fa-database mr-1"></i>Database: Error';
-                document.getElementById('aiStatus').innerHTML = '<i class="fas fa-robot mr-1"></i>AI: Error';
+                const dbStatus = document.getElementById('dbStatus');
+                const aiStatus = document.getElementById('aiStatus');
+                
+                dbStatus.innerHTML = '<i class="fas fa-database mr-1"></i>Database: Error';
+                dbStatus.className = 'px-3 py-1 bg-red-100 text-red-800 rounded-full text-sm';
+                
+                aiStatus.innerHTML = '<i class="fas fa-robot mr-1"></i>AI: Error';
+                aiStatus.className = 'px-3 py-1 bg-red-100 text-red-800 rounded-full text-sm';
             }
         }
         
@@ -249,13 +261,19 @@ HTML_TEMPLATE = '''
             try {
                 console.log('Loading databases...');
                 const response = await fetch('/api/databases');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
                 const data = await response.json();
                 console.log('Databases response:', data);
                 
                 const databaseList = document.getElementById('databaseList');
                 
-                if (data.success && data.databases.length > 0) {
-                    databaseList.innerHTML = ''; // Clear loading message
+                if (data.success && data.databases && data.databases.length > 0) {
+                    databaseList.innerHTML = ''; // Clear any loading message
+                    
                     data.databases.forEach(db => {
                         const dbCard = document.createElement('div');
                         dbCard.className = 'bg-blue-50 rounded-lg p-4 border border-blue-200 cursor-pointer hover:bg-blue-100 transition duration-200';
@@ -271,6 +289,7 @@ HTML_TEMPLATE = '''
                         dbCard.addEventListener('click', () => selectDatabase(db));
                         databaseList.appendChild(dbCard);
                     });
+                    
                     console.log('Databases loaded successfully:', data.databases);
                 } else {
                     databaseList.innerHTML = '<p class="text-gray-500 col-span-4 text-center py-4">No databases found or error loading databases.</p>';
@@ -660,7 +679,7 @@ HTML_TEMPLATE = '''
                                 DB: ${data.database}
                             </span>
                             <span class="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm">
-                                ${data.execution_result.} rows • ${data.execution_time_ms}ms
+                                ${data.execution_result.row_count} rows • ${data.execution_time_ms}ms
                             </span>
                         </div>
                     </div>
@@ -691,7 +710,7 @@ HTML_TEMPLATE = '''
                     <div class="bg-white border border-gray-200 rounded-xl overflow-hidden">
                         <h3 class="font-semibold text-gray-800 p-4 border-b border-gray-200">
                             <i class="fas fa-table mr-2"></i>Query Results
-                            <span class="text-sm font-normal text-gray-600 ml-2">(${data.execution_result.} rows)</span>
+                            <span class="text-sm font-normal text-gray-600 ml-2">(${data.execution_result.row_count} rows)</span>
                         </h3>
                         <div class="p-4 overflow-x-auto">
                             ${renderResultsTable(data.execution_result.data, data.execution_result.columns)}
@@ -778,7 +797,7 @@ HTML_TEMPLATE = '''
                             <span class="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs mr-2">${database}</span>
                             <p class="font-medium text-gray-800">${query}</p>
                         </div>
-                        <p class="text-sm text-gray-600">${data.execution_result.} rows • ${data.execution_time_ms}ms</p>
+                        <p class="text-sm text-gray-600">${data.execution_result.row_count} rows • ${data.execution_time_ms}ms</p>
                     </div>
                     <button onclick="this.closest('.bg-gray-50').remove()" class="text-gray-400 hover:text-gray-600 ml-2">
                         <i class="fas fa-times"></i>
@@ -803,10 +822,12 @@ HTML_TEMPLATE = '''
             });
         }
 
-        // Initialize
+        // Initialize when DOM is fully loaded
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('Initializing SQL Query Assistant...');
-            checkSystemStatus();
+            console.log('DOM fully loaded, initializing SQL Query Assistant...');
+            setTimeout(() => {
+                checkSystemStatus();
+            }, 100);
         });
     </script>
 </body>
@@ -829,8 +850,8 @@ def health():
     # Test Gemini connection
     gemini_connected = False
     try:
-        test_response = gemini_client.model.generate_content("Test")
-        gemini_connected = True
+        # Simple test to check if Gemini is configured
+        gemini_connected = gemini_client.is_initialized()
     except Exception as e:
         logger.error(f"Gemini connection test failed: {e}")
         gemini_connected = False
@@ -865,7 +886,7 @@ def get_tables_with_columns(database):
     try:
         data = request.get_json()
         is_custom = data.get('is_custom', False)
-        custom_connection = data.get('custom_connection')  # Add this
+        custom_connection = data.get('custom_connection')
         
         logger.info(f"Getting tables for {database}, custom: {is_custom}")
         
@@ -877,7 +898,7 @@ def get_tables_with_columns(database):
                 custom_config={
                     'server': custom_connection.get('server'),
                     'user': custom_connection.get('username'),
-                    'password': custom_connection.get('password'),  # Include password
+                    'password': custom_connection.get('password'),
                     'port': custom_connection.get('port', '3306')
                 }
             )
@@ -891,7 +912,7 @@ def get_tables_with_columns(database):
                 custom_config={
                     'server': connection_info.get('server'),
                     'user': connection_info.get('username'),
-                    'password': connection_info.get('password'),  # Include password
+                    'password': connection_info.get('password'),
                     'port': connection_info.get('port', '3306')
                 }
             )
